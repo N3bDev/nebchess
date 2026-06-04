@@ -1,0 +1,4 @@
+/target
+/tools/bin/
+/tools/books/
+*.bin
