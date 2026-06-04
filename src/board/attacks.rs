@@ -118,6 +118,56 @@ pub fn relevant_mask(sq: Square, deltas: &[(i8, i8); 4]) -> Bitboard {
     mask
 }
 
+use crate::board::magics::{Magic, BISHOP_MAGICS, BISHOP_TABLE_SIZE, ROOK_MAGICS, ROOK_TABLE_SIZE};
+use std::sync::LazyLock;
+
+struct SliderTables {
+    rook: Vec<u64>,
+    bishop: Vec<u64>,
+}
+
+#[inline]
+fn magic_index(m: &Magic, occ: Bitboard) -> usize {
+    (((occ.0 & m.mask).wrapping_mul(m.magic)) >> m.shift) as usize + m.offset as usize
+}
+
+fn build_table(magics: &[Magic; 64], deltas: &[(i8, i8); 4], size: usize) -> Vec<u64> {
+    let mut table = vec![0u64; size];
+    for (i, m) in magics.iter().enumerate() {
+        let sq = Square::new(i as u8);
+        let mut sub: u64 = 0;
+        loop {
+            let occ = Bitboard(sub);
+            table[magic_index(m, occ)] = sliding_attacks_slow(sq, occ, deltas).0;
+            sub = sub.wrapping_sub(m.mask) & m.mask;
+            if sub == 0 {
+                break;
+            }
+        }
+    }
+    table
+}
+
+static SLIDERS: LazyLock<SliderTables> = LazyLock::new(|| SliderTables {
+    rook: build_table(&ROOK_MAGICS, &ROOK_DELTAS, ROOK_TABLE_SIZE),
+    bishop: build_table(&BISHOP_MAGICS, &BISHOP_DELTAS, BISHOP_TABLE_SIZE),
+});
+
+#[inline]
+pub fn rook_attacks(sq: Square, occ: Bitboard) -> Bitboard {
+    Bitboard(SLIDERS.rook[magic_index(&ROOK_MAGICS[sq.index()], occ)])
+}
+
+#[inline]
+pub fn bishop_attacks(sq: Square, occ: Bitboard) -> Bitboard {
+    Bitboard(SLIDERS.bishop[magic_index(&BISHOP_MAGICS[sq.index()], occ)])
+}
+
+#[inline]
+pub fn queen_attacks(sq: Square, occ: Bitboard) -> Bitboard {
+    rook_attacks(sq, occ) | bishop_attacks(sq, occ)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +274,47 @@ mod tests {
         assert_eq!(relevant_mask(d4, &ROOK_DELTAS).count(), 10);
         assert_eq!(relevant_mask(d4, &BISHOP_DELTAS).count(), 9);
         assert_eq!(relevant_mask(Square::A1, &BISHOP_DELTAS).count(), 6);
+    }
+
+    struct TestRng(u64);
+    impl TestRng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E3779B97F4A7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+            z ^ (z >> 31)
+        }
+    }
+
+    #[test]
+    fn magic_equals_slow_on_random_occupancies() {
+        let mut rng = TestRng(0xDEADBEEF);
+        for i in 0..64 {
+            let sq = Square::new(i);
+            for _ in 0..256 {
+                let occ = Bitboard(rng.next() & rng.next()); // ~25% fill
+                assert_eq!(
+                    rook_attacks(sq, occ),
+                    sliding_attacks_slow(sq, occ, &ROOK_DELTAS),
+                    "rook mismatch on {sq} occ {occ:?}"
+                );
+                assert_eq!(
+                    bishop_attacks(sq, occ),
+                    sliding_attacks_slow(sq, occ, &BISHOP_DELTAS),
+                    "bishop mismatch on {sq} occ {occ:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn queen_is_rook_plus_bishop() {
+        let d4 = Square::from_name("d4").unwrap();
+        let occ = bb_of(&["d6", "f6", "b2"]);
+        assert_eq!(
+            queen_attacks(d4, occ),
+            rook_attacks(d4, occ) | bishop_attacks(d4, occ)
+        );
     }
 }

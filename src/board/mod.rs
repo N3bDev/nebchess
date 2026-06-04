@@ -1,5 +1,6 @@
 pub mod attacks;
 pub mod bitboard;
+pub mod magics;
 pub mod types;
 
 pub use bitboard::Bitboard;
