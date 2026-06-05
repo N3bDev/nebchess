@@ -266,7 +266,6 @@ impl<E: Evaluator> SearchThread<E> {
     }
 
     /// Static eval trending up vs two plies ago (same side) — margin scaler.
-    #[allow(dead_code)] // consumed by futility/RFP (Task 5)
     fn improving(&self, ply: usize) -> bool {
         ply >= 2 && self.stack[ply].static_eval > self.stack[ply - 2].static_eval
     }
@@ -353,6 +352,22 @@ impl<E: Evaluator> SearchThread<E> {
         };
         self.stack[ply].static_eval = static_eval;
 
+        let improving = self.improving(ply);
+        // reverse futility: shallow node already beating beta by a margin.
+        // Guards: not in a mate/mated search (beta/static_eval in non-mate
+        // range only) so we never truncate forced-mate lines.
+        if ply > 0
+            && !in_check
+            && depth <= 6
+            && beta.abs() < MATE_BOUND
+            && static_eval.abs() < MATE_BOUND
+        {
+            let margin = (if improving { 60 } else { 80 }) * depth;
+            if static_eval - margin >= beta {
+                return static_eval;
+            }
+        }
+
         // null-move pruning: if we pass the turn and the opponent STILL
         // can't get under beta, this node is prunable. Guards: in check
         // (illegal), consecutive nulls (infinite recursion), pawn-only
@@ -380,6 +395,11 @@ impl<E: Evaluator> SearchThread<E> {
 
         let killers = self.stack[ply].killers;
         let stm = self.pos.stm();
+        let futile = ply > 0
+            && !in_check
+            && depth <= 2
+            && alpha.abs() < MATE_BOUND
+            && static_eval + 90 * depth + 120 <= alpha;
         let mut picker = MovePicker::new(&self.pos, tt_move, killers, &self.history, stm);
         let mut legal = 0u32;
         let mut quiet_count = 0u32;
@@ -387,6 +407,12 @@ impl<E: Evaluator> SearchThread<E> {
         let mut best_move = Move::NULL;
         let mut first = true;
         while let Some(mv) = picker.next() {
+            // futility: at very shallow depth with a hopeless eval, quiet moves
+            // can't recover. depth <= 2 only: deeper skips break sacrificial
+            // combinations (WAC canary 268->257, attributed by A/B 2026-06-05)
+            if futile && legal > 0 && !mv.is_capture() && !mv.is_promotion() {
+                continue;
+            }
             if !self.pos.make(mv) {
                 continue;
             }
