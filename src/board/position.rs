@@ -25,8 +25,6 @@ impl std::fmt::Display for FenError {
 }
 impl std::error::Error for FenError {}
 
-// constructed by make() in the next commit
-#[allow(dead_code)]
 pub(crate) struct Undo {
     pub mv: Move,
     pub captured: Option<Piece>,
@@ -47,8 +45,6 @@ pub struct Position {
     pub(crate) halfmove: u16,
     pub(crate) fullmove: u16,
     pub(crate) key: u64,
-    // populated by make() in the next commit
-    #[allow(dead_code)]
     pub(crate) undo_stack: Vec<Undo>,
 }
 
@@ -128,8 +124,6 @@ impl Position {
         self.occ_all.set(sq);
         self.mailbox[sq.index()] = Some(p);
     }
-    // used by make() in the next commit
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn remove_raw(&mut self, sq: Square) -> Piece {
         let p = self.mailbox[sq.index()].expect("remove_raw: empty square");
@@ -139,8 +133,6 @@ impl Position {
         self.mailbox[sq.index()] = None;
         p
     }
-    // used by make() in the next commit
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn move_raw(&mut self, from: Square, to: Square) {
         let p = self.remove_raw(from);
@@ -153,16 +145,12 @@ impl Position {
         self.put_raw(p, sq);
         self.key ^= KEYS.pieces[p.index()][sq.index()];
     }
-    // used by make() in the next commit
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn remove_piece(&mut self, sq: Square) -> Piece {
         let p = self.remove_raw(sq);
         self.key ^= KEYS.pieces[p.index()][sq.index()];
         p
     }
-    // used by make() in the next commit
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn move_piece(&mut self, from: Square, to: Square) {
         let p = self.remove_piece(from);
@@ -328,11 +316,390 @@ impl Position {
         out.push_str(&format!(" {} {}", self.halfmove, self.fullmove));
         out
     }
+
+    /// Is `sq` attacked by any piece of color `by`?
+    pub fn square_attacked(&self, sq: Square, by: Color) -> bool {
+        let occ = self.occ_all;
+        // a `by`-pawn attacks sq iff a pawn of the OTHER color on sq would attack it (symmetry)
+        (attacks::pawn_attacks(by.flip(), sq) & self.piece_bb(by, PieceType::Pawn)).any()
+            || (attacks::knight_attacks(sq) & self.piece_bb(by, PieceType::Knight)).any()
+            || (attacks::king_attacks(sq) & self.piece_bb(by, PieceType::King)).any()
+            || (attacks::bishop_attacks(sq, occ)
+                & (self.piece_bb(by, PieceType::Bishop) | self.piece_bb(by, PieceType::Queen)))
+            .any()
+            || (attacks::rook_attacks(sq, occ)
+                & (self.piece_bb(by, PieceType::Rook) | self.piece_bb(by, PieceType::Queen)))
+            .any()
+    }
+
+    #[inline]
+    pub fn in_check(&self, color: Color) -> bool {
+        self.square_attacked(self.king_sq(color), color.flip())
+    }
+
+    /// Applies a pseudo-legal move. Returns false (state unchanged) if it
+    /// would leave the mover's king attacked.
+    pub fn make(&mut self, mv: Move) -> bool {
+        let stm = self.stm;
+        let (from, to, flag) = (mv.from(), mv.to(), mv.flag());
+        let captured = if flag == Move::EN_PASSANT {
+            Some(Piece::new(stm.flip(), PieceType::Pawn))
+        } else {
+            self.mailbox[to.index()]
+        };
+        self.undo_stack.push(Undo {
+            mv,
+            captured,
+            castling: self.castling,
+            ep: self.ep,
+            halfmove: self.halfmove,
+            key: self.key,
+        });
+
+        let mover = self.mailbox[from.index()].expect("make: empty from-square");
+        debug_assert_eq!(mover.color(), stm);
+
+        // clear stale EP state
+        if let Some(ep) = self.ep.take() {
+            self.key ^= KEYS.ep_file[ep.file() as usize];
+        }
+
+        // remove captured piece
+        if mv.is_capture() {
+            if flag == Move::EN_PASSANT {
+                // captured pawn sits on the from-rank, to-file
+                self.remove_piece(Square::from_fr(to.file(), from.rank()));
+            } else {
+                self.remove_piece(to);
+            }
+        }
+
+        // move the piece (promotions swap the pawn for the new piece)
+        if mv.is_promotion() {
+            self.remove_piece(from);
+            self.put_piece(Piece::new(stm, mv.promotion_piece_type()), to);
+        } else {
+            self.move_piece(from, to);
+        }
+
+        // flag-specific side effects
+        match flag {
+            Move::KING_CASTLE => {
+                let (rf, rt) = match stm {
+                    Color::White => (Square::H1, Square::F1),
+                    Color::Black => (Square::H8, Square::F8),
+                };
+                self.move_piece(rf, rt);
+            }
+            Move::QUEEN_CASTLE => {
+                let (rf, rt) = match stm {
+                    Color::White => (Square::A1, Square::D1),
+                    Color::Black => (Square::A8, Square::D8),
+                };
+                self.move_piece(rf, rt);
+            }
+            Move::DOUBLE_PUSH => {
+                let ep_sq = Square::from_fr(from.file(), (from.rank() + to.rank()) / 2);
+                if self.ep_capturable(ep_sq, stm) {
+                    self.ep = Some(ep_sq);
+                    self.key ^= KEYS.ep_file[ep_sq.file() as usize];
+                }
+            }
+            _ => {}
+        }
+
+        // castling rights: per-square masks handle king moves, rook moves,
+        // and rook captures uniformly
+        const CASTLE_MASK: [u8; 64] = {
+            let mut m = [0b1111u8; 64];
+            m[0] = 0b1101; // a1: clear WQ
+            m[4] = 0b1100; // e1: clear WK|WQ
+            m[7] = 0b1110; // h1: clear WK
+            m[56] = 0b0111; // a8: clear BQ
+            m[60] = 0b0011; // e8: clear BK|BQ
+            m[63] = 0b1011; // h8: clear BK
+            m
+        };
+        let old_castling = self.castling.bits();
+        self.castling
+            .mask(CASTLE_MASK[from.index()] & CASTLE_MASK[to.index()]);
+        self.key ^=
+            KEYS.castling[old_castling as usize] ^ KEYS.castling[self.castling.bits() as usize];
+
+        // clocks
+        self.halfmove = if mover.piece_type() == PieceType::Pawn || mv.is_capture() {
+            0
+        } else {
+            self.halfmove + 1
+        };
+        if stm == Color::Black {
+            self.fullmove += 1;
+        }
+
+        // side to move
+        self.stm = stm.flip();
+        self.key ^= KEYS.black_to_move;
+
+        debug_assert_eq!(self.key, self.compute_key());
+
+        // legality: mover's king must not be attacked
+        if self.square_attacked(self.king_sq(stm), self.stm) {
+            self.unmake();
+            return false;
+        }
+        true
+    }
+
+    /// Exactly reverses the last make(). Key/castling/ep/halfmove restored
+    /// from the undo record; piece moves reversed with raw (keyless) ops.
+    pub fn unmake(&mut self) {
+        let u = self.undo_stack.pop().expect("unmake: empty undo stack");
+        let mv = u.mv;
+        let flag = mv.flag();
+        self.stm = self.stm.flip(); // back to the mover
+        let stm = self.stm;
+        if stm == Color::Black {
+            self.fullmove -= 1;
+        }
+
+        // reverse the piece movement
+        if mv.is_promotion() {
+            self.remove_raw(mv.to());
+            self.put_raw(Piece::new(stm, PieceType::Pawn), mv.from());
+        } else {
+            self.move_raw(mv.to(), mv.from());
+        }
+
+        // reverse side effects
+        match flag {
+            Move::KING_CASTLE => {
+                let (rf, rt) = match stm {
+                    Color::White => (Square::H1, Square::F1),
+                    Color::Black => (Square::H8, Square::F8),
+                };
+                self.move_raw(rt, rf);
+            }
+            Move::QUEEN_CASTLE => {
+                let (rf, rt) = match stm {
+                    Color::White => (Square::A1, Square::D1),
+                    Color::Black => (Square::A8, Square::D8),
+                };
+                self.move_raw(rt, rf);
+            }
+            Move::EN_PASSANT => {
+                // captured pawn returns to from-rank, to-file
+                self.put_raw(
+                    Piece::new(stm.flip(), PieceType::Pawn),
+                    Square::from_fr(mv.to().file(), mv.from().rank()),
+                );
+            }
+            _ => {}
+        }
+        if flag != Move::EN_PASSANT {
+            if let Some(captured) = u.captured {
+                self.put_raw(captured, mv.to());
+            }
+        }
+
+        self.castling = u.castling;
+        self.ep = u.ep;
+        self.halfmove = u.halfmove;
+        self.key = u.key;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mv(pos: &Position, from: &str, to: &str, flag: u16) -> Move {
+        let _ = pos;
+        Move::new(
+            Square::from_name(from).unwrap(),
+            Square::from_name(to).unwrap(),
+            flag,
+        )
+    }
+
+    #[test]
+    fn square_attacked_basics() {
+        let pos = Position::startpos();
+        // e3 attacked by white pawns (d2/f2), g1-knight covers f3
+        assert!(pos.square_attacked(Square::from_name("e3").unwrap(), Color::White));
+        assert!(pos.square_attacked(Square::from_name("f3").unwrap(), Color::White));
+        // e4 attacked by nobody at start
+        assert!(!pos.square_attacked(Square::from_name("e4").unwrap(), Color::White));
+        assert!(!pos.square_attacked(Square::from_name("e4").unwrap(), Color::Black));
+        assert!(!pos.in_check(Color::White));
+        // sliding attacks through occupancy
+        let pos = Position::from_fen("4r2k/8/8/8/8/8/4R3/4K3 w - - 0 1").unwrap();
+        assert!(pos.square_attacked(Square::from_name("e5").unwrap(), Color::Black)); // re8
+        assert!(!pos.square_attacked(Square::E1, Color::Black)); // blocked by Re2
+    }
+
+    /// make+unmake must restore FEN, key, and stack depth exactly.
+    fn assert_make_unmake(fen: &str, m: Move, expect_legal: bool) {
+        let mut pos = Position::from_fen(fen).unwrap();
+        let key_before = pos.key();
+        let legal = pos.make(m);
+        assert_eq!(legal, expect_legal, "legality of {m} in {fen}");
+        if legal {
+            assert_eq!(pos.key(), pos.compute_key(), "incremental key after {m}");
+            pos.unmake();
+        }
+        assert_eq!(pos.to_fen(), fen, "state restore after {m}");
+        assert_eq!(pos.key(), key_before, "key restore after {m}");
+        assert_eq!(pos.key(), pos.compute_key());
+    }
+
+    #[test]
+    fn make_unmake_quiet_and_double_push() {
+        let pos = Position::startpos();
+        assert_make_unmake(START_FEN, mv(&pos, "g1", "f3", Move::QUIET), true);
+        assert_make_unmake(START_FEN, mv(&pos, "e2", "e4", Move::DOUBLE_PUSH), true);
+    }
+
+    #[test]
+    fn double_push_sets_ep_only_when_capturable() {
+        let mut pos = Position::startpos();
+        assert!(pos.make(Move::new(
+            Square::from_name("e2").unwrap(),
+            Square::from_name("e4").unwrap(),
+            Move::DOUBLE_PUSH
+        )));
+        assert_eq!(pos.ep(), None, "no black pawn adjacent to e4");
+        // black pawn on d4 -> e2e4 must set ep = e3
+        let mut pos =
+            Position::from_fen("rnbqkbnr/ppp1pppp/8/8/3p4/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+                .unwrap();
+        assert!(pos.make(Move::new(
+            Square::from_name("e2").unwrap(),
+            Square::from_name("e4").unwrap(),
+            Move::DOUBLE_PUSH
+        )));
+        assert_eq!(pos.ep(), Some(Square::from_name("e3").unwrap()));
+        assert_eq!(pos.key(), pos.compute_key());
+    }
+
+    #[test]
+    fn make_unmake_captures() {
+        let fen = "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+        let pos = Position::from_fen(fen).unwrap();
+        assert_make_unmake(fen, mv(&pos, "e4", "d5", Move::CAPTURE), true);
+    }
+
+    #[test]
+    fn make_unmake_en_passant() {
+        let fen = "8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+        let m = mv(&pos, "c4", "d3", Move::EN_PASSANT);
+        assert_make_unmake(fen, m, true);
+        // verify the captured pawn vanishes from d4 (not d3)
+        let mut pos = Position::from_fen(fen).unwrap();
+        assert!(pos.make(m));
+        assert_eq!(pos.piece_on(Square::from_name("d4").unwrap()), None);
+        assert_eq!(
+            pos.piece_on(Square::from_name("d3").unwrap()),
+            Some(Piece::new(Color::Black, PieceType::Pawn))
+        );
+    }
+
+    #[test]
+    fn make_unmake_castling_moves_rook() {
+        let fen = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+        assert_make_unmake(fen, mv(&pos, "e1", "g1", Move::KING_CASTLE), true);
+        assert_make_unmake(fen, mv(&pos, "e1", "c1", Move::QUEEN_CASTLE), true);
+        let mut pos = Position::from_fen(fen).unwrap();
+        assert!(pos.make(mv(&pos, "e1", "g1", Move::KING_CASTLE)));
+        assert_eq!(
+            pos.piece_on(Square::F1),
+            Some(Piece::new(Color::White, PieceType::Rook))
+        );
+        assert_eq!(pos.piece_on(Square::H1), None);
+        assert!(!pos.castling().has(CastlingRights::WK));
+        assert!(!pos.castling().has(CastlingRights::WQ));
+        assert!(pos.castling().has(CastlingRights::BK));
+    }
+
+    #[test]
+    fn rook_capture_strips_castling_right() {
+        // Ra1xa8: black loses queenside right, white loses queenside right (rook moved)
+        let fen = "r3k2r/8/8/8/8/8/6B1/R3K2R w KQkq - 0 1";
+        let mut pos = Position::from_fen(fen).unwrap();
+        let m = mv(&pos, "a1", "a8", Move::CAPTURE);
+        assert!(pos.make(m));
+        assert!(!pos.castling().has(CastlingRights::BQ), "a8 rook captured");
+        assert!(!pos.castling().has(CastlingRights::WQ), "a1 rook moved");
+        assert!(pos.castling().has(CastlingRights::BK));
+        assert_eq!(pos.key(), pos.compute_key());
+        pos.unmake();
+        assert_eq!(pos.to_fen(), fen, "rook capture restore");
+        assert_eq!(pos.key(), pos.compute_key());
+        assert!(pos.castling().has(CastlingRights::BQ) && pos.castling().has(CastlingRights::WQ));
+    }
+
+    #[test]
+    fn make_unmake_chain_restores_exactly() {
+        // mixed flags over 6 plies; cumulative drift would survive single-move tests
+        let mut pos = Position::startpos();
+        let start_key = pos.key();
+        let moves = [
+            ("g1", "f3", Move::QUIET),
+            ("g8", "f6", Move::QUIET),
+            ("e2", "e4", Move::DOUBLE_PUSH),
+            ("e7", "e5", Move::DOUBLE_PUSH),
+            ("f1", "c4", Move::QUIET),
+            ("f8", "c5", Move::QUIET),
+        ];
+        for (f, t, flag) in moves {
+            assert!(pos.make(mv(&pos, f, t, flag)));
+            assert_eq!(pos.key(), pos.compute_key(), "drift after {f}{t}");
+        }
+        for _ in 0..moves.len() {
+            pos.unmake();
+        }
+        assert_eq!(pos.to_fen(), START_FEN);
+        assert_eq!(pos.key(), start_key);
+    }
+
+    #[test]
+    fn make_unmake_promotions() {
+        // c7 pawn: push-promote to empty c8, or capture-promote the b8 knight.
+        let fen = "1n2k3/2P5/8/8/8/8/8/4K3 w - - 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+        assert_make_unmake(fen, mv(&pos, "c7", "b8", Move::PROMO_CAP_Q), true);
+        assert_make_unmake(fen, mv(&pos, "c7", "c8", Move::PROMO_N), true);
+        let mut pos = Position::from_fen(fen).unwrap();
+        assert!(pos.make(mv(&pos, "c7", "c8", Move::PROMO_Q)));
+        assert_eq!(
+            pos.piece_on(Square::C8),
+            Some(Piece::new(Color::White, PieceType::Queen))
+        );
+    }
+
+    #[test]
+    fn illegal_move_rejected_and_state_unchanged() {
+        // Re2 is pinned by Re8; moving it off the e-file is illegal
+        let fen = "4r2k/8/8/8/8/8/4R3/4K3 w - - 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+        assert_make_unmake(fen, mv(&pos, "e2", "a2", Move::QUIET), false);
+        // staying on the file is legal
+        assert_make_unmake(fen, mv(&pos, "e2", "e5", Move::QUIET), true);
+    }
+
+    #[test]
+    fn halfmove_and_fullmove_clocks() {
+        let mut pos = Position::startpos();
+        pos.make(mv(&pos, "g1", "f3", Move::QUIET));
+        assert_eq!(pos.halfmove(), 1);
+        assert_eq!(pos.fullmove(), 1);
+        pos.make(mv(&pos, "g8", "f6", Move::QUIET));
+        assert_eq!(pos.halfmove(), 2);
+        assert_eq!(pos.fullmove(), 2); // increments after black moves
+        pos.make(mv(&pos, "e2", "e4", Move::DOUBLE_PUSH));
+        assert_eq!(pos.halfmove(), 0, "pawn move resets");
+    }
 
     pub const KIWIPETE: &str =
         "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
@@ -413,5 +780,19 @@ mod tests {
         ] {
             assert!(Position::from_fen(fen).is_err(), "accepted bad FEN: {fen}");
         }
+    }
+
+    #[test]
+    fn en_passant_exposing_rank_pin_rejected() {
+        // The most famous make/unmake trap: exd6 e.p. removes BOTH pawns from
+        // rank 5, exposing Ka5 to Rh5. Must be rejected.
+        let fen = "8/8/8/K2pP2r/8/8/8/4k3 w - d6 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+        assert_eq!(
+            pos.ep(),
+            Some(Square::from_name("d6").unwrap()),
+            "ep parsed"
+        );
+        assert_make_unmake(fen, mv(&pos, "e5", "d6", Move::EN_PASSANT), false);
     }
 }
