@@ -7,6 +7,9 @@ command and exits 1.
 
 Usage: tools/perft_compare.py [games=25] [max_plies=40]
 Requires: stockfish on PATH, `cargo build --release` already run.
+
+Stockfish runs as ONE persistent process: SF18 loads its NNUE nets on
+startup (~1s), so spawn-per-query turns a 2-minute run into a 40-minute one.
 """
 import random
 import subprocess
@@ -16,29 +19,60 @@ NEB = "./target/release/perft"
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 
-def sf(cmds: str) -> str:
-    return subprocess.run(
-        ["stockfish"], input=cmds, capture_output=True, text=True, timeout=60
-    ).stdout
+class Stockfish:
+    """Minimal persistent UCI pipe."""
 
+    def __init__(self) -> None:
+        self.p = subprocess.Popen(
+            ["stockfish"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self._sync()
 
-def sf_perft(fen: str, depth: int) -> dict[str, int]:
-    out = sf(f"position fen {fen}\ngo perft {depth}\n")
-    moves = {}
-    for line in out.splitlines():
-        parts = line.split(": ")
-        if len(parts) == 2 and 4 <= len(parts[0]) <= 5 and parts[1].strip().isdigit():
-            if parts[0] != "Nodes searched":
+    def _send(self, cmd: str) -> None:
+        assert self.p.stdin is not None
+        self.p.stdin.write(cmd + "\n")
+
+    def _sync(self) -> None:
+        self._send("isready")
+        assert self.p.stdout is not None
+        for line in self.p.stdout:
+            if line.strip() == "readyok":
+                return
+        raise RuntimeError("stockfish died")
+
+    def perft(self, fen: str, depth: int) -> dict[str, int]:
+        self._send(f"position fen {fen}")
+        self._send(f"go perft {depth}")
+        moves: dict[str, int] = {}
+        assert self.p.stdout is not None
+        for line in self.p.stdout:
+            line = line.strip()
+            if line.startswith("Nodes searched"):
+                break
+            parts = line.split(": ")
+            if len(parts) == 2 and 4 <= len(parts[0]) <= 5 and parts[1].isdigit():
                 moves[parts[0]] = int(parts[1])
-    return moves
+        return moves
 
-
-def sf_fen_after(fen: str, move: str) -> str:
-    out = sf(f"position fen {fen} moves {move}\nd\n")
-    for line in out.splitlines():
-        if line.startswith("Fen: "):
-            return line[5:].strip()
-    raise RuntimeError("stockfish gave no Fen line")
+    def fen_after(self, fen: str, move: str) -> str:
+        self._send(f"position fen {fen} moves {move}")
+        self._send("d")
+        fen_out = None
+        assert self.p.stdout is not None
+        for line in self.p.stdout:
+            line = line.strip()
+            if line.startswith("Fen: "):
+                fen_out = line[5:]
+            if line.startswith("Checkers"):  # last line of `d` output
+                break
+        self._sync()
+        if fen_out is None:
+            raise RuntimeError("stockfish gave no Fen line")
+        return fen_out
 
 
 def neb_perft(fen: str, depth: int) -> dict[str, int]:
@@ -57,11 +91,12 @@ def main() -> int:
     games = int(sys.argv[1]) if len(sys.argv) > 1 else 25
     max_plies = int(sys.argv[2]) if len(sys.argv) > 2 else 40
     rng = random.Random(0x4E45)  # fixed seed, reproducible
+    sf = Stockfish()
     positions = 0
     for g in range(games):
         fen = START
         for _ in range(max_plies):
-            ours, theirs = neb_perft(fen, 2), sf_perft(fen, 2)
+            ours, theirs = neb_perft(fen, 2), sf.perft(fen, 2)
             positions += 1
             if ours != theirs:
                 print(f"MISMATCH at: {fen}")
@@ -73,8 +108,8 @@ def main() -> int:
                 return 1
             if not theirs:
                 break  # mate/stalemate
-            fen = sf_fen_after(fen, rng.choice(sorted(theirs)))
-        print(f"game {g + 1}/{games} ok ({positions} positions so far)")
+            fen = sf.fen_after(fen, rng.choice(sorted(theirs)))
+        print(f"game {g + 1}/{games} ok ({positions} positions so far)", flush=True)
     print(f"PASS: {positions} positions cross-validated")
     return 0
 
