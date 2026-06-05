@@ -2,3 +2,5 @@
 /tools/bin/
 /tools/books/
 *.bin
+__pycache__/
+.claude/

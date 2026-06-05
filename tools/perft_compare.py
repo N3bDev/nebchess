@@ -12,10 +12,13 @@ Stockfish runs as ONE persistent process: SF18 loads its NNUE nets on
 startup (~1s), so spawn-per-query turns a 2-minute run into a 40-minute one.
 """
 import random
+import shutil
 import subprocess
 import sys
 
 NEB = "./target/release/perft"
+# PATH first, then the project-local install (tools/bin is gitignored)
+STOCKFISH = shutil.which("stockfish") or "./tools/bin/stockfish"
 START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 
@@ -24,7 +27,7 @@ class Stockfish:
 
     def __init__(self) -> None:
         self.p = subprocess.Popen(
-            ["stockfish"],
+            [STOCKFISH],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
