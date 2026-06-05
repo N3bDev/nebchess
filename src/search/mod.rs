@@ -2,12 +2,16 @@
 //! fixed-depth negamax + alpha-beta + quiescence with MVV-LVA ordering.
 //! All mutable search state lives in SearchThread (spec §5.1).
 
+pub mod limits;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::board::{generate_moves, Move, MoveList, PieceType, Position};
 use crate::eval::psqt::MATERIAL;
 use crate::eval::Evaluator;
+use crate::search::limits::{Limits, TimeManager};
 
 pub const MATE: i32 = 30_000;
 /// |score| above this is a mate score (UCI "score mate" conversion).
@@ -103,6 +107,15 @@ impl MovePicker {
     }
 }
 
+/// Per-iteration report for UCI `info` lines.
+pub struct IterInfo<'a> {
+    pub depth: i32,
+    pub score: i32,
+    pub nodes: u64,
+    pub elapsed_ms: u128,
+    pub pv: &'a [Move],
+}
+
 pub struct SearchThread<E: Evaluator> {
     pub pos: Position,
     pub eval: E,
@@ -110,6 +123,8 @@ pub struct SearchThread<E: Evaluator> {
     stop: Arc<AtomicBool>,
     node_limit: Option<u64>,
     stopped: bool,
+    deadline: Option<Instant>,
+    overhead_ms: u64,
     pv: PvTable,
 }
 
@@ -122,6 +137,8 @@ impl<E: Evaluator> SearchThread<E> {
             stop: Arc::new(AtomicBool::new(false)),
             node_limit: None,
             stopped: false,
+            deadline: None,
+            overhead_ms: 10,
             pv: PvTable::new(),
         }
     }
@@ -135,6 +152,9 @@ impl<E: Evaluator> SearchThread<E> {
     }
     pub fn set_node_limit(&mut self, limit: Option<u64>) {
         self.node_limit = limit;
+    }
+    pub fn set_overhead_ms(&mut self, ms: u64) {
+        self.overhead_ms = ms;
     }
 
     /// Best line from the last completed search call.
@@ -167,6 +187,11 @@ impl<E: Evaluator> SearchThread<E> {
             }
             if let Some(limit) = self.node_limit {
                 if self.nodes >= limit {
+                    self.stopped = true;
+                }
+            }
+            if let Some(d) = self.deadline {
+                if Instant::now() >= d {
                     self.stopped = true;
                 }
             }
@@ -337,5 +362,64 @@ impl<E: Evaluator> SearchThread<E> {
             return -(MATE - ply as i32); // mate found inside qsearch
         }
         best
+    }
+
+    /// First root move that survives the legality filter (bestmove fallback).
+    fn first_legal(&mut self) -> Option<Move> {
+        let mut list = MoveList::new();
+        generate_moves(&self.pos, &mut list);
+        for &mv in list.iter() {
+            if self.pos.make(mv) {
+                self.pos.unmake();
+                return Some(mv);
+            }
+        }
+        None
+    }
+
+    /// Iterative deepening driver. Returns None only when the root has no
+    /// legal moves (mate/stalemate already on the board).
+    /// `info` is called after every COMPLETED iteration.
+    pub fn iterate(&mut self, limits: &Limits, mut info: impl FnMut(IterInfo)) -> Option<Move> {
+        let tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms);
+        self.deadline = tm.hard_deadline();
+        self.node_limit = limits.nodes;
+        self.nodes = 0;
+        self.stop.store(false, Ordering::Relaxed);
+
+        let mut best = self.first_legal()?;
+        let max_depth = limits
+            .depth
+            .unwrap_or(MAX_PLY as i32 - 1)
+            .clamp(1, MAX_PLY as i32 - 1);
+
+        for depth in 1..=max_depth {
+            let (mv, score) = self.search_to_depth(depth);
+            if self.was_stopped() {
+                // partial iteration: only trust it at depth 1 (first full
+                // root move beats the arbitrary fallback)
+                if depth == 1 {
+                    if let Some(mv) = mv {
+                        best = mv;
+                    }
+                }
+                break;
+            }
+            best = mv.expect("completed iteration always has a move");
+            info(IterInfo {
+                depth,
+                score,
+                nodes: self.nodes,
+                elapsed_ms: tm.elapsed_ms(),
+                pv: self.pv.line(),
+            });
+            if tm.past_soft() {
+                break;
+            }
+            if score.abs() >= MATE_BOUND {
+                break; // forced mate found; deeper search can't change it
+            }
+        }
+        Some(best)
     }
 }

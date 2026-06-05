@@ -2,7 +2,8 @@
 
 use nebchess::board::{movegen::find_uci_move, Position};
 use nebchess::eval::Hce;
-use nebchess::search::{SearchThread, MATE, MATE_BOUND};
+use nebchess::search::{limits::Limits, SearchThread, MATE, MATE_BOUND};
+use std::time::Instant;
 
 fn searcher(fen: &str) -> SearchThread<Hce> {
     SearchThread::new(Position::from_fen(fen).unwrap(), Hce::new())
@@ -95,4 +96,74 @@ fn en_prise_king_fen_does_not_panic() {
         score > MATE_BOUND,
         "king capture scores as won, got {score}"
     );
+}
+
+#[test]
+fn movetime_is_respected() {
+    let mut st = searcher("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    let limits = Limits {
+        movetime: Some(100),
+        ..Limits::default()
+    };
+    let t0 = Instant::now();
+    let best = st.iterate(&limits, |_| {});
+    let elapsed = t0.elapsed().as_millis();
+    assert!(best.is_some());
+    assert!(elapsed < 600, "movetime 100 took {elapsed}ms");
+}
+
+#[test]
+fn depth_limit_caps_iterations() {
+    let mut st = searcher("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    let limits = Limits {
+        depth: Some(3),
+        ..Limits::default()
+    };
+    let mut depths = Vec::new();
+    st.iterate(&limits, |i| depths.push(i.depth));
+    assert_eq!(depths, vec![1, 2, 3]);
+}
+
+#[test]
+fn tiny_node_budget_still_returns_legal_move() {
+    let mut st = searcher("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1");
+    // a 1-node budget forces the earliest possible abort path; the
+    // first-legal fallback must still produce a legal bestmove
+    let limits = Limits {
+        nodes: Some(1),
+        ..Limits::default()
+    };
+    let best = st.iterate(&limits, |_| {}).expect("legal moves exist");
+    let pos = Position::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+    assert!(find_uci_move(&pos, &best.to_string()).is_some());
+}
+
+#[test]
+fn clock_allocation_returns_promptly() {
+    let mut st = searcher("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    let limits = Limits {
+        wtime: Some(1_000),
+        ..Limits::default()
+    }; // soft ~33ms, hard ~132ms
+    let t0 = Instant::now();
+    st.iterate(&limits, |_| {});
+    assert!(t0.elapsed().as_millis() < 700);
+}
+
+#[test]
+fn mate_found_exits_early() {
+    let mut st = searcher("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1");
+    let limits = Limits::default(); // no limits at all
+    let t0 = Instant::now();
+    let best = st.iterate(&limits, |_| {});
+    assert_eq!(best.unwrap().to_string(), "a1a8");
+    assert!(t0.elapsed().as_secs() < 5, "mate-bound early exit");
+}
+
+#[test]
+fn no_legal_moves_returns_none() {
+    // stalemate on the board
+    let mut st = searcher("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1");
+    let best = st.iterate(&Limits::default(), |_| {});
+    assert!(best.is_none());
 }
