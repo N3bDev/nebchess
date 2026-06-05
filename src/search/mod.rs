@@ -81,6 +81,11 @@ impl StackEntry {
     };
 }
 
+/// Butterfly history: [side][from][to], bumped depth^2 on quiet beta cutoffs.
+/// Fresh per `go` (SearchThread is per-search; cross-move persistence is an
+/// M4 refactor — recorded in the plan header).
+type HistoryTable = [[[i32; 64]; 64]; 2];
+
 /// Ordering tiers: TT move (2M) > captures by MVV-LVA (1M+) > quiets (0).
 struct MovePicker {
     moves: MoveList,
@@ -93,7 +98,13 @@ struct MovePicker {
 const ATTACKER_VALS: [i32; 6] = [100, 320, 330, 500, 900, 10_000];
 
 impl MovePicker {
-    fn new(pos: &Position, tt_move: Move, killers: [Move; 2]) -> MovePicker {
+    fn new(
+        pos: &Position,
+        tt_move: Move,
+        killers: [Move; 2],
+        history: &HistoryTable,
+        stm: crate::board::Color,
+    ) -> MovePicker {
         let mut moves = MoveList::new();
         generate_moves(pos, &mut moves);
         let mut scores = [0i32; 256];
@@ -113,7 +124,7 @@ impl MovePicker {
             } else if mv == killers[1] {
                 899_999
             } else {
-                0
+                history[stm.index()][mv.from().index()][mv.to().index()]
             };
         }
         MovePicker {
@@ -164,6 +175,7 @@ pub struct SearchThread<E: Evaluator> {
     pv: PvTable,
     stack: Box<[StackEntry; MAX_PLY]>,
     tt: Arc<Tt>,
+    history: Box<HistoryTable>,
 }
 
 impl<E: Evaluator> SearchThread<E> {
@@ -180,6 +192,7 @@ impl<E: Evaluator> SearchThread<E> {
             pv: PvTable::new(),
             stack: Box::new([StackEntry::EMPTY; MAX_PLY]),
             tt: Arc::new(Tt::new(16)),
+            history: Box::new([[[0; 64]; 64]; 2]),
         }
     }
 
@@ -323,7 +336,8 @@ impl<E: Evaluator> SearchThread<E> {
 
         let tt_move = tt_hit.as_ref().map_or(Move::NULL, |h| h.mv);
         let killers = self.stack[ply].killers;
-        let mut picker = MovePicker::new(&self.pos, tt_move, killers);
+        let stm = self.pos.stm();
+        let mut picker = MovePicker::new(&self.pos, tt_move, killers, &self.history, stm);
         let mut legal = 0u32;
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -347,13 +361,16 @@ impl<E: Evaluator> SearchThread<E> {
                     best_move = mv;
                     self.pv.update(ply, mv);
                     if alpha >= beta {
-                        // killer update on quiet beta cutoffs only
+                        // killer + history update on quiet beta cutoffs only
                         if !mv.is_capture() {
                             let k = &mut self.stack[ply].killers;
                             if k[0] != mv {
                                 k[1] = k[0];
                                 k[0] = mv;
                             }
+                            let h = &mut self.history[self.pos.stm().index()][mv.from().index()]
+                                [mv.to().index()];
+                            *h = (*h + depth * depth).min(799_999);
                         }
                         break; // beta cutoff
                     }
@@ -422,7 +439,9 @@ impl<E: Evaluator> SearchThread<E> {
             stand_pat
         };
 
-        let mut picker = MovePicker::new(&self.pos, Move::NULL, [Move::NULL; 2]);
+        let stm = self.pos.stm();
+        let mut picker =
+            MovePicker::new(&self.pos, Move::NULL, [Move::NULL; 2], &self.history, stm);
         let mut legal = 0u32;
         while let Some(mv) = picker.next() {
             // quiet moves only matter when evading check
@@ -528,7 +547,14 @@ mod tests {
         let tt_move = find_uci_move(&pos, "a2a3").unwrap(); // arbitrary quiet as TT move
         let k0 = find_uci_move(&pos, "a2a4").unwrap();
         let k1 = find_uci_move(&pos, "g2g3").unwrap();
-        let mut picker = MovePicker::new(&pos, tt_move, [k0, k1]);
+        let history: Box<HistoryTable> = Box::new([[[0; 64]; 64]; 2]);
+        let mut picker = MovePicker::new(
+            &pos,
+            tt_move,
+            [k0, k1],
+            &history,
+            crate::board::Color::White,
+        );
         let first = picker.next().unwrap();
         assert_eq!(first, tt_move, "TT move first even though quiet");
         // then all captures, then exactly k0, k1, then the rest
@@ -548,5 +574,37 @@ mod tests {
             );
         }
         assert!(seen_killer0);
+    }
+
+    #[test]
+    fn history_orders_quiets_below_killers() {
+        let pos = Position::from_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        )
+        .unwrap();
+        let hot = find_uci_move(&pos, "g2g3").unwrap();
+        let killer = find_uci_move(&pos, "a2a4").unwrap();
+        let mut history: Box<HistoryTable> = Box::new([[[0; 64]; 64]; 2]);
+        history[0][hot.from().index()][hot.to().index()] = 50_000;
+        let mut picker = MovePicker::new(
+            &pos,
+            Move::NULL,
+            [killer, Move::NULL],
+            &history,
+            crate::board::Color::White,
+        );
+        // order: captures..., killer, hot history quiet, ...rest
+        let mut prev_was_killer = false;
+        while let Some(mv) = picker.next() {
+            if mv == killer {
+                prev_was_killer = true;
+                continue;
+            }
+            if prev_was_killer {
+                assert_eq!(mv, hot, "hot-history quiet must follow the killer");
+                break;
+            }
+            assert!(mv.is_capture(), "captures precede the killer");
+        }
     }
 }
