@@ -9,7 +9,8 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M0: scaffolding, CI, test harness
 - [x] M1: board representation + perft-verified move generation
 - [x] M2: minimal playing engine (search, eval, UCI)
-- [ ] M3: transposition table + move ordering + PVS
+- [x] M3: transposition table + move ordering + PVS
+- [ ] M4: search pruning (null move, LMR, aspiration) + PST tuning pipeline
 
 ## Play against it
 
