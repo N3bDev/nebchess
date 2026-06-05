@@ -31,7 +31,7 @@ impl Uci {
             pos: Position::startpos(),
             stop: Arc::new(AtomicBool::new(false)),
             search: None,
-            overhead_ms: 10,
+            overhead_ms: 50,
         }
     }
 
@@ -96,7 +96,7 @@ impl Uci {
         println!("option name Hash type spin default 16 min 1 max 4096");
         println!("option name Threads type spin default 1 min 1 max 1");
         println!("option name MultiPV type spin default 1 min 1 max 1");
-        println!("option name Move Overhead type spin default 10 min 0 max 5000");
+        println!("option name Move Overhead type spin default 50 min 0 max 5000");
         println!("uciok");
     }
 

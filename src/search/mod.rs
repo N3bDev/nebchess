@@ -139,7 +139,7 @@ impl<E: Evaluator> SearchThread<E> {
             node_limit: None,
             stopped: false,
             deadline: None,
-            overhead_ms: 10,
+            overhead_ms: 50,
             pv: PvTable::new(),
         }
     }
