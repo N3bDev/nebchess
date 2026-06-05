@@ -167,3 +167,45 @@ fn no_legal_moves_returns_none() {
     let best = st.iterate(&Limits::default(), |_| {});
     assert!(best.is_none());
 }
+
+// --- Task 3: TT cutoff + store behavior tests ---
+
+#[test]
+fn tt_makes_research_cheap_and_stable() {
+    let mut st = searcher("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
+    let (best1, score1) = st.search_to_depth(6);
+    let nodes_first = st.nodes;
+    let (best2, score2) = st.search_to_depth(6); // same thread: warm TT
+    let nodes_second = st.nodes - nodes_first;
+    assert_eq!(best1, best2, "warm-TT re-search must agree");
+    assert_eq!(score1, score2);
+    assert!(
+        nodes_second * 4 < nodes_first,
+        "warm TT should slash nodes: {nodes_first} then {nodes_second}"
+    );
+}
+
+#[test]
+fn mate_scores_survive_tt_round_trips() {
+    let mut st = searcher("k7/8/2K5/8/8/8/8/7R w - - 0 1");
+    let (_b1, s1) = st.search_to_depth(4);
+    assert_eq!(s1, MATE - 3);
+    let (b2, s2) = st.search_to_depth(4); // warm TT: ply-adjust must hold
+    assert_eq!(s2, MATE - 3, "mate distance corrupted through the TT");
+    assert_eq!(b2.unwrap().to_string(), "c6b6");
+}
+
+#[test]
+fn tiny_tt_collision_storm_is_sound() {
+    // 1MB table + deep-ish search = heavy collisions; the gate is soundness
+    // (no panics, legal move, sane score), not strength
+    let mut st =
+        searcher("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10");
+    st.set_tt(std::sync::Arc::new(nebchess::search::tt::Tt::new(1)));
+    let (best, score) = st.search_to_depth(7);
+    assert!(best.is_some());
+    assert!(
+        score.abs() < 1000,
+        "quiet position, sane score, got {score}"
+    );
+}

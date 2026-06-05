@@ -1,5 +1,4 @@
-//! M2 search: iterative-deepening driver lives in Task 5; this module is
-//! fixed-depth negamax + alpha-beta + quiescence with MVV-LVA ordering.
+//! M3 search: iterative-deepening + TT cutoffs/stores + alpha-beta + qsearch.
 //! All mutable search state lives in SearchThread (spec §5.1).
 
 pub mod bench;
@@ -292,9 +291,30 @@ impl<E: Evaluator> SearchThread<E> {
             return self.eval.evaluate(&self.pos);
         }
 
+        // TT probe. We always probe for the tt_move (used in Task 4 move
+        // ordering); at ply > 0 a sufficient-depth hit may short-circuit the
+        // full search (grafting). KNOWN CAVEAT: TT grafting can interact with
+        // path-dependent draw scores (repetition/50-move). The draw checks
+        // above run BEFORE the probe, bounding the damage; this is universal
+        // practice at this engine level.
+        let tt_hit = self.tt.probe(self.pos.key(), ply);
+        if ply > 0 {
+            if let Some(ref h) = tt_hit {
+                if h.depth >= depth {
+                    match h.bound {
+                        tt::Bound::Exact => return h.score,
+                        tt::Bound::Lower if h.score >= beta => return h.score,
+                        tt::Bound::Upper if h.score <= alpha => return h.score,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         let mut picker = MovePicker::new(&self.pos);
         let mut legal = 0u32;
         let mut best = -INF;
+        let mut best_move = Move::NULL;
         while let Some(mv) = picker.next() {
             if !self.pos.make(mv) {
                 continue;
@@ -312,6 +332,7 @@ impl<E: Evaluator> SearchThread<E> {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = mv;
                     self.pv.update(ply, mv);
                     if alpha >= beta {
                         break; // beta cutoff
@@ -321,12 +342,30 @@ impl<E: Evaluator> SearchThread<E> {
         }
 
         if legal == 0 {
+            // legal==0 path does NOT store to the TT (no best move to record).
             return if self.pos.in_check(self.pos.stm()) {
                 -(MATE - ply as i32) // checkmated at this ply
             } else {
                 self.draw_score() // stalemate
             };
         }
+
+        let bound = if best >= beta {
+            tt::Bound::Lower // the stored move is the cutoff move
+        } else if best_move != Move::NULL {
+            tt::Bound::Exact
+        } else {
+            tt::Bound::Upper // failed low: no move raised alpha
+        };
+        self.tt.store(
+            self.pos.key(),
+            best_move,
+            best,
+            tt::EVAL_NONE,
+            depth,
+            bound,
+            ply,
+        );
         best
     }
 
