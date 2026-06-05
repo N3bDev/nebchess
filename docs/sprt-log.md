@@ -13,5 +13,6 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | PVS | history | [0,10] | 744 | 284-198-262 | **H1: +40.3 ±18.7** (1 timeout) | 1312955 |
 
 | 2026-06-05 | Null-move pruning | pvs | [0,10] | 330 | 155-63-112 | **H1: +99.5 ±31.0** (0 timeouts) | 689295 |
+| 2026-06-05 | LMR (depth>=3, killers exempt) | nullmove | [0,10] | 934 | 301-217-416 | **H1: +31.3 ±16.1** (1 timeout, old side) | 212534 |
 
 **M3 cumulative: +384.4 measured self-play elo over M2** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only).
