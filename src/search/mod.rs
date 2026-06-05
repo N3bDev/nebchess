@@ -341,6 +341,7 @@ impl<E: Evaluator> SearchThread<E> {
         let mut legal = 0u32;
         let mut best = -INF;
         let mut best_move = Move::NULL;
+        let mut first = true;
         while let Some(mv) = picker.next() {
             if !self.pos.make(mv) {
                 continue;
@@ -348,7 +349,19 @@ impl<E: Evaluator> SearchThread<E> {
             self.eval.on_make(mv, &self.pos);
             self.stack[ply].current_move = mv;
             legal += 1;
-            let score = -self.negamax(depth - 1, -beta, -alpha, ply + 1);
+            let score = if first {
+                -self.negamax(depth - 1, -beta, -alpha, ply + 1)
+            } else {
+                // scout: prove the move can't beat alpha with a null window
+                let zw = -self.negamax(depth - 1, -alpha - 1, -alpha, ply + 1);
+                if zw > alpha && zw < beta {
+                    // surprise: re-search with the real window
+                    -self.negamax(depth - 1, -beta, -alpha, ply + 1)
+                } else {
+                    zw
+                }
+            };
+            first = false;
             self.pos.unmake();
             self.eval.on_unmake(mv, &self.pos);
             if self.stopped {

@@ -257,3 +257,21 @@ fn tt_ordering_reduces_nodes() {
         cold.nodes
     );
 }
+
+// --- Task 7: Principal Variation Search equivalence tests ---
+
+#[test]
+fn pvs_preserves_mate_distances_and_pv() {
+    let mut st = searcher("k7/8/2K5/8/8/8/8/7R w - - 0 1");
+    let (best, score) = st.search_to_depth(6); // deeper than the mate
+    assert_eq!(score, MATE - 3, "PVS altered a proven mate score");
+    assert_eq!(best.unwrap().to_string(), "c6b6");
+}
+
+#[test]
+fn pvs_scores_match_across_warm_research() {
+    let mut st = searcher("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    let (b1, s1) = st.search_to_depth(7);
+    let (b2, s2) = st.search_to_depth(7);
+    assert_eq!((b1, s1), (b2, s2), "PVS+TT re-search instability");
+}
