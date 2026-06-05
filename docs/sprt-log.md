@@ -9,3 +9,4 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | TT cutoffs | m2 | [0,10] | 568 | 241-154-173 | **H1: +53.6 ±22.2** (2 timeouts = host load; controlled gauntlet 0/200) | 3027664 |
 | 2026-06-05 | TT-move ordering + king LVA fix | tt-cuts | [0,10] | 236 | 142-36-58 | **H1: +168.0 ±41.0** (1 timeout, same load pattern) | 2945582 |
 | 2026-06-05 | Killer moves | tt-ordering | [0,10] | 438 | 194-99-145 | **H1: +76.6 ±27.0** (0 timeouts) | 1983350 |
+| 2026-06-05 | Butterfly history | killers | [0,10] | 624 | 246-164-214 | **H1: +45.9 ±20.0** (2 timeouts EACH side — symmetric load noise) | 1820387 |
