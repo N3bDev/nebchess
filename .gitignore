@@ -1,6 +1,7 @@
 /target
 /tools/bin/
 /tools/books/
+/tools/suites/
 *.bin
 __pycache__/
 .claude/

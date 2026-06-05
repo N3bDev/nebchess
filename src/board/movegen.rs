@@ -158,6 +158,117 @@ pub fn find_first_legal(pos: &mut Position) -> Option<Move> {
     None
 }
 
+/// Resolves a SAN string ("Nf3", "bxa8=Q+", "O-O", "Rad1") against the legal
+/// moves of `pos`. Returns None for unknown/ambiguous strings. Suffixes
+/// (+, #, !, ?) are ignored. Built for EPD test suites, not hot paths.
+pub fn find_san_move(pos: &Position, san: &str) -> Option<Move> {
+    let san = san.trim_end_matches(['+', '#', '!', '?']);
+    let mut pos = pos.clone();
+    let mut list = MoveList::new();
+    generate_moves(&pos, &mut list);
+    // collect legal candidates matching the SAN's constraints
+    let mut matches = Vec::new();
+    for &mv in list.iter() {
+        if !pos.make(mv) {
+            continue;
+        }
+        pos.unmake();
+        if san_matches(&pos, mv, san) {
+            matches.push(mv);
+        }
+    }
+    if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None // unknown or ambiguous
+    }
+}
+
+fn san_matches(pos: &Position, mv: Move, san: &str) -> bool {
+    use crate::board::PieceType::*;
+    // castling first
+    if san == "O-O" {
+        return mv.flag() == Move::KING_CASTLE;
+    }
+    if san == "O-O-O" {
+        return mv.flag() == Move::QUEEN_CASTLE;
+    }
+    if mv.flag() == Move::KING_CASTLE || mv.flag() == Move::QUEEN_CASTLE {
+        return false;
+    }
+    let mover = pos.piece_on(mv.from()).expect("mover").piece_type();
+    let bytes = san.as_bytes();
+    let mut i = 0;
+    // leading piece letter (absent = pawn)
+    let piece = match bytes.first() {
+        Some(b'N') => Knight,
+        Some(b'B') => Bishop,
+        Some(b'R') => Rook,
+        Some(b'Q') => Queen,
+        Some(b'K') => King,
+        _ => Pawn,
+    };
+    if piece != Pawn {
+        i = 1;
+    }
+    if mover != piece {
+        return false;
+    }
+    // promotion suffix "=X"
+    let (body, promo) = match san.find('=') {
+        Some(p) => (&san[..p], san.as_bytes().get(p + 1).copied()),
+        None => (san, None),
+    };
+    match (promo, mv.is_promotion()) {
+        (None, true) | (Some(_), false) => return false,
+        (Some(c), true) => {
+            let want = match c {
+                b'N' => Knight,
+                b'B' => Bishop,
+                b'R' => Rook,
+                b'Q' => Queen,
+                _ => return false,
+            };
+            if mv.promotion_piece_type() != want {
+                return false;
+            }
+        }
+        (None, false) => {}
+    }
+    let body = &body[i..];
+    // target square = last two chars of body
+    if body.len() < 2 {
+        return false;
+    }
+    let dest = &body[body.len() - 2..];
+    match Square::from_name(dest) {
+        Some(sq) if sq == mv.to() => {}
+        _ => return false,
+    }
+    // middle part: optional 'x' and disambiguation file/rank
+    let mid = &body[..body.len() - 2];
+    let mid = mid.trim_end_matches('x');
+    if san.contains('x') != mv.is_capture() {
+        return false;
+    }
+    for &c in mid.as_bytes() {
+        match c {
+            b'a'..=b'h' => {
+                if mv.from().file() != c - b'a' {
+                    return false;
+                }
+            }
+            b'1'..=b'8' => {
+                if mv.from().rank() != c - b'1' {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Resolves a UCI long-algebraic string ("e2e4", "e7e8q", castling as "e1g1")
 /// against the pseudo-legal move list. Returns None for unknown strings.
 /// NOTE: pseudo-legal resolution — the caller still validates via make().
@@ -298,6 +409,27 @@ mod tests {
         // stalemate FEN: black to move, no legal moves
         let mut pos = Position::from_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").unwrap();
         assert!(find_first_legal(&mut pos).is_none());
+    }
+
+    #[test]
+    fn find_san_move_resolves_common_forms() {
+        let pos = Position::startpos();
+        assert_eq!(find_san_move(&pos, "e4").unwrap().to_string(), "e2e4");
+        assert_eq!(find_san_move(&pos, "Nf3").unwrap().to_string(), "g1f3");
+        // captures, checks, disambiguation, promotion, castling
+        let pos = Position::from_fen("r3k2r/pPpp1ppp/8/8/8/8/P1PPP1PP/R3K2R w KQkq - 0 1").unwrap();
+        assert_eq!(find_san_move(&pos, "bxa8=Q+").unwrap().to_string(), "b7a8q");
+        assert_eq!(find_san_move(&pos, "O-O").unwrap().to_string(), "e1g1");
+        assert_eq!(find_san_move(&pos, "O-O-O").unwrap().to_string(), "e1c1");
+        // disambiguation: both rooks can reach d1; king on rank 2 off the path
+        let pos = Position::from_fen("3k4/8/8/8/8/8/K7/R6R w - - 0 1").unwrap();
+        assert_eq!(find_san_move(&pos, "Rad1").unwrap().to_string(), "a1d1");
+        assert_eq!(find_san_move(&pos, "Rhd1").unwrap().to_string(), "h1d1");
+        assert!(
+            find_san_move(&pos, "Rd1").is_none(),
+            "ambiguous without file"
+        );
+        assert!(find_san_move(&pos, "Qz9").is_none());
     }
 
     #[test]
