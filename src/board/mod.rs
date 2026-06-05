@@ -3,6 +3,7 @@ pub mod bitboard;
 pub mod magics;
 pub mod movegen;
 pub mod moves;
+pub mod perft;
 pub mod position;
 pub mod types;
 pub mod zobrist;
