@@ -348,6 +348,32 @@ impl<E: Evaluator> SearchThread<E> {
             _ => self.eval.evaluate(&self.pos),
         };
         self.stack[ply].static_eval = static_eval;
+
+        // null-move pruning: if we pass the turn and the opponent STILL
+        // can't get under beta, this node is prunable. Guards: in check
+        // (illegal), consecutive nulls (infinite recursion), pawn-only
+        // material (zugzwang), eval below beta (no margin to give away).
+        if ply > 0
+            && !in_check
+            && depth >= 3
+            && static_eval >= beta
+            && self.stack[ply - 1].current_move != Move::NULL
+            && self.pos.has_non_pawn_material(self.pos.stm())
+        {
+            const R: i32 = 3;
+            self.stack[ply].current_move = Move::NULL;
+            self.pos.make_null();
+            let score = -self.negamax(depth - 1 - R, -beta, -beta + 1, ply + 1);
+            self.pos.unmake_null();
+            if self.stopped {
+                return 0;
+            }
+            if score >= beta {
+                // never return unproven mate scores from a null search
+                return if score >= MATE_BOUND { beta } else { score };
+            }
+        }
+
         let killers = self.stack[ply].killers;
         let stm = self.pos.stm();
         let mut picker = MovePicker::new(&self.pos, tt_move, killers, &self.history, stm);
