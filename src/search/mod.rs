@@ -82,29 +82,36 @@ impl StackEntry {
     };
 }
 
-/// Scores generated moves once, then yields them best-first by selection.
-/// M2 ordering: captures by MVV-LVA (above all quiets), quiets unordered.
+/// Ordering tiers: TT move (2M) > captures by MVV-LVA (1M+) > quiets (0).
 struct MovePicker {
     moves: MoveList,
     scores: [i32; 256],
     cur: usize,
 }
 
+/// LVA values: unlike eval MATERIAL, the king must rank as the MOST
+/// expensive attacker (it was 0 there, sorting king-captures first).
+const ATTACKER_VALS: [i32; 6] = [100, 320, 330, 500, 900, 10_000];
+
 impl MovePicker {
-    fn new(pos: &Position) -> MovePicker {
+    fn new(pos: &Position, tt_move: Move) -> MovePicker {
         let mut moves = MoveList::new();
         generate_moves(pos, &mut moves);
         let mut scores = [0i32; 256];
         for (i, &mv) in moves.iter().enumerate() {
-            if mv.is_capture() {
+            scores[i] = if mv == tt_move && mv != Move::NULL {
+                2_000_000 // matched against the GENERATED list = inherent legality
+            } else if mv.is_capture() {
                 let victim = if mv.flag() == Move::EN_PASSANT {
                     PieceType::Pawn
                 } else {
                     pos.piece_on(mv.to()).expect("capture target").piece_type()
                 };
                 let attacker = pos.piece_on(mv.from()).expect("mover").piece_type();
-                scores[i] = 1_000_000 + 10 * MATERIAL[victim.index()] - MATERIAL[attacker.index()];
-            }
+                1_000_000 + 10 * MATERIAL[victim.index()] - ATTACKER_VALS[attacker.index()]
+            } else {
+                0
+            };
         }
         MovePicker {
             moves,
@@ -311,7 +318,8 @@ impl<E: Evaluator> SearchThread<E> {
             }
         }
 
-        let mut picker = MovePicker::new(&self.pos);
+        let tt_move = tt_hit.as_ref().map_or(Move::NULL, |h| h.mv);
+        let mut picker = MovePicker::new(&self.pos, tt_move);
         let mut legal = 0u32;
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -402,7 +410,7 @@ impl<E: Evaluator> SearchThread<E> {
             stand_pat
         };
 
-        let mut picker = MovePicker::new(&self.pos);
+        let mut picker = MovePicker::new(&self.pos, Move::NULL);
         let mut legal = 0u32;
         while let Some(mv) = picker.next() {
             // quiet moves only matter when evading check

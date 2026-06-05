@@ -209,3 +209,51 @@ fn tiny_tt_collision_storm_is_sound() {
         "quiet position, sane score, got {score}"
     );
 }
+
+// --- Task 4: TT-move ordering + MVV-LVA king attacker fix ---
+
+#[test]
+fn junk_tt_move_is_ignored_not_played() {
+    // poison the TT entry for the root position with a junk move encoding,
+    // then search: the engine must neither panic nor emit an illegal move
+    let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+    let mut st = searcher(fen);
+    let tt = std::sync::Arc::new(nebchess::search::tt::Tt::new(1));
+    let key = nebchess::board::Position::from_fen(fen).unwrap().key();
+    // raw 0xFFFF decodes to h8->h8 promo-capture nonsense: never generated
+    tt.store(
+        key,
+        nebchess::board::Move::from_raw(0xFFFF),
+        500,
+        nebchess::search::tt::EVAL_NONE,
+        12,
+        nebchess::search::tt::Bound::Lower,
+        0,
+    );
+    st.set_tt(tt);
+    let (best, _) = st.search_to_depth(4);
+    let pos = nebchess::board::Position::from_fen(fen).unwrap();
+    assert!(
+        nebchess::board::movegen::find_uci_move(&pos, &best.unwrap().to_string()).is_some(),
+        "junk TT move leaked into play"
+    );
+}
+
+#[test]
+fn tt_ordering_reduces_nodes() {
+    // search depth 6 cold, then depth 7: the depth-6 TT moves should steer
+    // depth 7 well below a cold depth-7 search
+    let fen = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
+    let mut warm = searcher(fen);
+    warm.search_to_depth(6);
+    let nodes_before_7 = warm.nodes;
+    warm.search_to_depth(7);
+    let warm_7 = warm.nodes - nodes_before_7;
+    let mut cold = searcher(fen);
+    cold.search_to_depth(7);
+    assert!(
+        warm_7 < cold.nodes,
+        "TT-move ordering should beat cold search: warm {warm_7} vs cold {}",
+        cold.nodes
+    );
+}
