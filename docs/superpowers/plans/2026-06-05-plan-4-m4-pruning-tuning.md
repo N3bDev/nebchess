@@ -821,6 +821,276 @@ git commit -m "feat(eval): Texel tuning pipeline; PST+material tuned on quiet-la
 
 ---
 
+### Task 7b (scope addition, user-requested): Tactical regression harness
+
+**Rationale:** self-play SPRT shares blind spots between both engines (spec §10.4); a pruning stack can "optimize into blindness" undetected. Independent tactical suites are the canary. Informational at first; the wrap-up gate gains a soft floor once a baseline history exists.
+
+**Files:**
+- Create: `src/bin/solve.rs`, `tools/download-testsuites.sh`, `tools/tactics.sh`, `docs/tactics-log.md`
+- Modify: `src/board/movegen.rs` (SAN resolver), `.gitignore` (`/tools/suites/`)
+
+- [ ] **Step 7b.1: SAN resolver tests** (append inside `movegen.rs` `mod tests`)
+
+```rust
+    #[test]
+    fn find_san_move_resolves_common_forms() {
+        let pos = Position::startpos();
+        assert_eq!(find_san_move(&pos, "e4").unwrap().to_string(), "e2e4");
+        assert_eq!(find_san_move(&pos, "Nf3").unwrap().to_string(), "g1f3");
+        // captures, checks, disambiguation, promotion, castling
+        let pos = Position::from_fen("r3k2r/pPpp1ppp/8/8/8/8/P1PPP1PP/R3K2R w KQkq - 0 1").unwrap();
+        assert_eq!(find_san_move(&pos, "bxa8=Q+").unwrap().to_string(), "b7a8q");
+        assert_eq!(find_san_move(&pos, "O-O").unwrap().to_string(), "e1g1");
+        assert_eq!(find_san_move(&pos, "O-O-O").unwrap().to_string(), "e1c1");
+        let pos = Position::from_fen("4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1").unwrap();
+        assert_eq!(find_san_move(&pos, "Rad1").unwrap().to_string(), "a1d1");
+        assert_eq!(find_san_move(&pos, "Rhd1").unwrap().to_string(), "h1d1");
+        assert!(find_san_move(&pos, "Rd1").is_none(), "ambiguous without file");
+        assert!(find_san_move(&pos, "Qz9").is_none());
+    }
+```
+
+- [ ] **Step 7b.2: SAN resolver** (append to `movegen.rs`)
+
+```rust
+/// Resolves a SAN string ("Nf3", "bxa8=Q+", "O-O", "Rad1") against the legal
+/// moves of `pos`. Returns None for unknown/ambiguous strings. Suffixes
+/// (+, #, !, ?) are ignored. Built for EPD test suites, not hot paths.
+pub fn find_san_move(pos: &Position, san: &str) -> Option<Move> {
+    let san = san.trim_end_matches(['+', '#', '!', '?']);
+    let mut pos = pos.clone();
+    let mut list = MoveList::new();
+    generate_moves(&pos, &mut list);
+    // collect legal candidates matching the SAN's constraints
+    let mut matches = Vec::new();
+    for &mv in list.iter() {
+        if !pos.make(mv) {
+            continue;
+        }
+        pos.unmake();
+        if san_matches(&pos, mv, san) {
+            matches.push(mv);
+        }
+    }
+    if matches.len() == 1 {
+        Some(matches[0])
+    } else {
+        None // unknown or ambiguous
+    }
+}
+
+fn san_matches(pos: &Position, mv: Move, san: &str) -> bool {
+    use crate::board::PieceType::*;
+    // castling first
+    if san == "O-O" {
+        return mv.flag() == Move::KING_CASTLE;
+    }
+    if san == "O-O-O" {
+        return mv.flag() == Move::QUEEN_CASTLE;
+    }
+    if mv.flag() == Move::KING_CASTLE || mv.flag() == Move::QUEEN_CASTLE {
+        return false;
+    }
+    let mover = pos.piece_on(mv.from()).expect("mover").piece_type();
+    let bytes = san.as_bytes();
+    let mut i = 0;
+    // leading piece letter (absent = pawn)
+    let piece = match bytes.first() {
+        Some(b'N') => Knight,
+        Some(b'B') => Bishop,
+        Some(b'R') => Rook,
+        Some(b'Q') => Queen,
+        Some(b'K') => King,
+        _ => Pawn,
+    };
+    if piece != Pawn {
+        i = 1;
+    }
+    if mover != piece {
+        return false;
+    }
+    // promotion suffix "=X"
+    let (body, promo) = match san.find('=') {
+        Some(p) => (&san[..p], san.as_bytes().get(p + 1).copied()),
+        None => (san, None),
+    };
+    match (promo, mv.is_promotion()) {
+        (None, true) | (Some(_), false) => return false,
+        (Some(c), true) => {
+            let want = match c {
+                b'N' => Knight,
+                b'B' => Bishop,
+                b'R' => Rook,
+                b'Q' => Queen,
+                _ => return false,
+            };
+            if mv.promotion_piece_type() != want {
+                return false;
+            }
+        }
+        (None, false) => {}
+    }
+    let body = &body[i..];
+    // target square = last two chars of body
+    if body.len() < 2 {
+        return false;
+    }
+    let dest = &body[body.len() - 2..];
+    match Square::from_name(dest) {
+        Some(sq) if sq == mv.to() => {}
+        _ => return false,
+    }
+    // middle part: optional 'x' and disambiguation file/rank
+    let mid = &body[..body.len() - 2];
+    let mid = mid.trim_end_matches('x');
+    if san.contains('x') != mv.is_capture() {
+        return false;
+    }
+    for &c in mid.as_bytes() {
+        match c {
+            b'a'..=b'h' => {
+                if mv.from().file() != c - b'a' {
+                    return false;
+                }
+            }
+            b'1'..=b'8' => {
+                if mv.from().rank() != c - b'1' {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+```
+
+- [ ] **Step 7b.3: Suite fetch + embedded BK24.** `tools/download-testsuites.sh`:
+
+```bash
+#!/usr/bin/env bash
+# WAC (Win At Chess): the standard 300-position tactical canary.
+set -euo pipefail
+cd "$(dirname "$0")"
+mkdir -p suites
+if [ ! -s suites/wac.epd ]; then
+  curl -sSfL -o suites/wac.epd \
+    "https://raw.githubusercontent.com/fsmosca/STS-Rating/master/epd/wacnew.epd"
+fi
+wc -l suites/wac.epd
+```
+
+(If that mirror 404s, report it — alternates exist; do NOT substitute a different suite silently. `.gitignore` gains `/tools/suites/`.)
+
+- [ ] **Step 7b.4: The solver** (`src/bin/solve.rs`)
+
+```rust
+//! EPD tactical-suite runner. Usage:
+//!   solve <suite.epd> [movetime_ms=1000]
+//! EPD line: <fen4> bm <san...>; id "name"; ...
+//! Scores a position when the searched bestmove matches ANY listed bm.
+
+use nebchess::board::movegen::find_san_move;
+use nebchess::board::Position;
+use nebchess::eval::Hce;
+use nebchess::search::limits::Limits;
+use nebchess::search::SearchThread;
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let path = args.first().expect("usage: solve <suite.epd> [movetime_ms]");
+    let movetime: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1000);
+    let data = std::fs::read_to_string(path).expect("read suite");
+
+    let (mut solved, mut total) = (0u32, 0u32);
+    let mut misses = Vec::new();
+    for line in data.lines() {
+        let Some(bm_at) = line.find(" bm ") else { continue };
+        let fen4 = &line[..bm_at];
+        let rest = &line[bm_at + 4..];
+        let bms: Vec<&str> = rest
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .collect();
+        let id = line
+            .split("id \"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .unwrap_or("?");
+        let Ok(pos) = Position::from_fen(&format!("{fen4} 0 1")) else {
+            eprintln!("bad fen: {id}");
+            continue;
+        };
+        let targets: Vec<String> = bms
+            .iter()
+            .filter_map(|san| find_san_move(&pos, san))
+            .map(|m| m.to_string())
+            .collect();
+        if targets.is_empty() {
+            eprintln!("unresolvable bm in {id}: {bms:?}");
+            continue;
+        }
+        total += 1;
+        let mut st = SearchThread::new(pos, Hce::new());
+        let limits = Limits {
+            movetime: Some(movetime),
+            ..Limits::default()
+        };
+        let best = st.iterate(&limits, |_| {});
+        match best {
+            Some(mv) if targets.contains(&mv.to_string()) => solved += 1,
+            best => misses.push(format!(
+                "{id}: played {} wanted {targets:?}",
+                best.map_or("none".into(), |m| m.to_string())
+            )),
+        }
+    }
+    for m in &misses {
+        println!("MISS {m}");
+    }
+    println!("Solved: {solved}/{total}");
+}
+```
+
+- [ ] **Step 7b.5: Runner + ledger.** `tools/tactics.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Tactical regression runner (informational metric; see docs/tactics-log.md).
+# Usage: tactics.sh [movetime_ms=1000]
+set -euo pipefail
+cd "$(dirname "$0")/.."
+MT="${1:-1000}"
+cargo build --release 2>/dev/null
+./target/release/solve tools/suites/wac.epd "$MT" | tail -3
+```
+
+`docs/tactics-log.md`:
+
+```markdown
+# Tactics Log
+
+WAC (300 positions) at 1000ms/position, single thread, default Hash.
+Informational regression canary — self-play SPRT shares blind spots
+between both engines; this metric does not. A drop >= 10 positions vs
+the previous entry is a stop-and-investigate signal.
+
+| date | binary | WAC | notes |
+|------|--------|-----|-------|
+```
+
+- [ ] **Step 7b.6: Baseline runs.** `chmod +x` both scripts; run the suite against (a) the current HEAD binary and (b) `tools/bin/baseline-pvs` (M3-final, via `./tools/bin/baseline-pvs` — the solve bin only drives the lib, so for (b) temporarily `git stash`-free approach: simply record HEAD's score now and note that baseline-pvs predates the solver; the M3-vs-M4 comparison is run by the CONTROLLER using the harness against both binaries' lib state — practical shortcut: run solve from HEAD for the current score; the controller separately checks out nothing). Record row(s) in docs/tactics-log.md. Expect WAC ~230-270/300 at this strength; anything under ~200 is itself a finding.
+- [ ] **Step 7b.7: Full suite + lint + commit** (`cargo test` — the SAN test joins the suite; bench UNCHANGED — solver is a bin):
+
+```bash
+git add src/board/movegen.rs src/bin/solve.rs tools/download-testsuites.sh tools/tactics.sh docs/tactics-log.md .gitignore
+git commit -m "feat(tools): tactical regression harness (WAC + SAN resolver)" -m "Bench: <unchanged — verify>"
+```
+
+---
+
 ### Task 8: M4 wrap-up
 
 - [ ] **Step 8.1: Idle-system forfeit gauntlet** — `tools/forfeit-gauntlet.sh 100` with NOTHING else running → 200 games, zero forfeits (blocker otherwise).
