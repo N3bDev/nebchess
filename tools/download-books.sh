@@ -7,7 +7,8 @@ cd "$(dirname "$0")"
 mkdir -p books && cd books
 BASE="https://github.com/official-stockfish/books/raw/master"
 for f in 8moves_v3.pgn.zip UHO_Lichess_4852_v1.epd.zip; do
-  if [ ! -f "${f%.zip}" ]; then
+  # -s: re-download if a previous run left a 0-byte/partial extraction
+  if [ ! -f "${f%.zip}" ] || [ ! -s "${f%.zip}" ]; then
     curl -sSfLO "$BASE/$f"
     unzip -o "$f" && rm "$f"
   fi
