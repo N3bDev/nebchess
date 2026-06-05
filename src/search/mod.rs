@@ -203,7 +203,6 @@ impl<E: Evaluator> SearchThread<E> {
 
     fn negamax(&mut self, depth: i32, mut alpha: i32, beta: i32, ply: usize) -> i32 {
         self.pv.clear_ply(ply);
-        self.nodes += 1;
         if self.should_stop() {
             return 0;
         }
@@ -228,6 +227,8 @@ impl<E: Evaluator> SearchThread<E> {
         if depth <= 0 {
             return self.qsearch(alpha, beta, ply);
         }
+        // interior node (horizon nodes are counted by qsearch)
+        self.nodes += 1;
         if ply >= MAX_PLY - 1 {
             return self.eval.evaluate(&self.pos);
         }
