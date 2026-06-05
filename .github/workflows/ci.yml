@@ -22,5 +22,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Build (release)
         run: cargo build --release
+      - name: Bench check
+        run: tools/check-bench.sh
       - name: Tests
         run: cargo test

@@ -10,6 +10,12 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M1: board representation + perft-verified move generation
 - [ ] M2: minimal playing engine (search, eval, UCI)
 
+## Development
+
+Engine-affecting commits carry a `Bench: <nodes>` line (get it via
+`./target/release/nebchess bench | tail -1`); CI re-runs the bench and
+fails on mismatch. Docs/tooling commits omit the line and are skipped.
+
 ## Build
 
 ```sh

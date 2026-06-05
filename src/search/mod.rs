@@ -2,6 +2,7 @@
 //! fixed-depth negamax + alpha-beta + quiescence with MVV-LVA ordering.
 //! All mutable search state lives in SearchThread (spec §5.1).
 
+pub mod bench;
 pub mod limits;
 
 use std::sync::atomic::{AtomicBool, Ordering};
