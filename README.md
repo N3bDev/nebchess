@@ -8,7 +8,13 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 
 - [x] M0: scaffolding, CI, test harness
 - [x] M1: board representation + perft-verified move generation
-- [ ] M2: minimal playing engine (search, eval, UCI)
+- [x] M2: minimal playing engine (search, eval, UCI)
+- [ ] M3: transposition table + move ordering + PVS
+
+## Play against it
+
+Build (`cargo build --release`), then point any UCI GUI (CuteChess, Arena,
+En Croissant) at `target/release/nebchess`.
 
 ## Development
 
