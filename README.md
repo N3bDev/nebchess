@@ -7,7 +7,7 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 ## Status
 
 - [x] M0: scaffolding, CI, test harness
-- [ ] M1: board representation + perft-verified move generation
+- [x] M1: board representation + perft-verified move generation
 - [ ] M2: minimal playing engine (search, eval, UCI)
 
 ## Build
