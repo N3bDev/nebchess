@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-04-nebchess-engine-design.md` §5.1 (SearchStack), §5.3 (TT layout/replacement/mate-ply), §10.3 (SPRT protocol), §12 M3 row ("TT cuts → TT-move ordering → killers → history → PVS, each its own SPRT").
 
+**Executed-review amendments (code as landed differs from blocks below):**
+- T2: TT cluster landed as parallel arrays (`data: [AtomicU64; 3]` + `keys: [AtomicU16; 3]` + pad) — the plan's `[Entry; 3]` form pads to 64B via AtomicU64 alignment; the parallel form hits exactly 32B (size/align test enforces). Documented in tt.rs.
+- Forfeit-scan gate reinterpretation: SPRT logs under concurrency-15 host load showed 1-2 tiny timeouts (1-82ms overruns, symmetric across old/new in gate #4) in 4 of 5 runs; these were classified as scheduler-load artifacts. The BLOCKER gate is the dedicated `forfeit-gauntlet.sh` run on an idle system, which passed 0/200. Tracked: backlog item "WSL2 timing robustness" (revisit at desktop migration; options: concurrency cap, adaptive overhead).
+
 **Plan deviations from spec (recorded deliberately):**
 - §5.3 parallel TT clear/resize: deferred to M9b (SMP) — M3 clears with a simple loop (single-threaded engine; a 4096MB table would stall, but Hash max stays modest until SMP).
 - §5.3 TT prefetch hook: deferred to the NPS milestone (no measurable value pre-SMP at M3 node rates).

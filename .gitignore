@@ -7,3 +7,4 @@ __pycache__/
 /tools/*.pgn
 /tools/*.log
 /tools/config.json
+/config.json
