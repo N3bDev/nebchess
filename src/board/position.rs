@@ -535,6 +535,50 @@ impl Position {
     pub fn is_fifty_move_draw(&self) -> bool {
         self.halfmove >= 100
     }
+
+    /// Null move: pass the turn (search-only device; illegal in chess).
+    /// Pairs strictly with unmake_null — NEVER with unmake().
+    pub fn make_null(&mut self) {
+        self.undo_stack.push(Undo {
+            mv: Move::NULL,
+            captured: None,
+            castling: self.castling,
+            ep: self.ep,
+            halfmove: self.halfmove,
+            key: self.key,
+        });
+        self.key_history.push(self.key);
+        if let Some(ep) = self.ep.take() {
+            self.key ^= KEYS.ep_file[ep.file() as usize];
+        }
+        self.halfmove += 1;
+        self.stm = self.stm.flip();
+        self.key ^= KEYS.black_to_move;
+        debug_assert_eq!(self.key, self.compute_key());
+    }
+
+    pub fn unmake_null(&mut self) {
+        self.key_history.pop();
+        let u = self
+            .undo_stack
+            .pop()
+            .expect("unmake_null: empty undo stack");
+        debug_assert_eq!(u.mv, Move::NULL, "unmake_null paired with a real make");
+        self.stm = self.stm.flip();
+        self.castling = u.castling;
+        self.ep = u.ep;
+        self.halfmove = u.halfmove;
+        self.key = u.key;
+    }
+
+    /// Anything beyond king+pawns for `color` (zugzwang guard for null-move).
+    pub fn has_non_pawn_material(&self, color: Color) -> bool {
+        (self.piece_bb(color, PieceType::Knight)
+            | self.piece_bb(color, PieceType::Bishop)
+            | self.piece_bb(color, PieceType::Rook)
+            | self.piece_bb(color, PieceType::Queen))
+        .any()
+    }
 }
 
 #[cfg(test)]
@@ -873,5 +917,57 @@ mod tests {
         assert!(pos.make(mv(&pos, "a1", "a2", Move::QUIET)));
         assert_eq!(pos.halfmove(), 100);
         assert!(pos.is_fifty_move_draw());
+    }
+
+    #[test]
+    fn null_move_roundtrip() {
+        let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        let mut pos = Position::from_fen(fen).unwrap();
+        let key = pos.key();
+        pos.make_null();
+        assert_ne!(pos.key(), key, "stm flip must change the key");
+        assert_eq!(pos.stm(), Color::Black);
+        assert_eq!(pos.key(), pos.compute_key());
+        pos.unmake_null();
+        assert_eq!(pos.to_fen(), fen);
+        assert_eq!(pos.key(), key);
+    }
+
+    #[test]
+    fn null_move_clears_ep_and_restores_it() {
+        let fen = "8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1"; // capturable ep kept
+        let mut pos = Position::from_fen(fen).unwrap();
+        assert!(pos.ep().is_some());
+        pos.make_null();
+        assert_eq!(pos.ep(), None, "null clears ep");
+        assert_eq!(pos.key(), pos.compute_key());
+        pos.unmake_null();
+        assert_eq!(pos.ep(), Some(Square::from_name("d3").unwrap()));
+        assert_eq!(pos.to_fen(), fen);
+    }
+
+    #[test]
+    fn null_move_interleaves_with_real_moves() {
+        let mut pos = Position::startpos();
+        let key0 = pos.key();
+        assert!(pos.make(mv(&pos, "e2", "e4", Move::DOUBLE_PUSH)));
+        pos.make_null();
+        assert!(pos.make(mv(&pos, "d2", "d3", Move::QUIET))); // white again after null
+        pos.unmake();
+        pos.unmake_null();
+        pos.unmake();
+        assert_eq!(pos.key(), key0);
+        assert_eq!(pos.to_fen(), START_FEN);
+    }
+
+    #[test]
+    fn non_pawn_material_detection() {
+        let pos = Position::startpos();
+        assert!(pos.has_non_pawn_material(Color::White));
+        let pos = Position::from_fen("4k3/4p3/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
+        assert!(!pos.has_non_pawn_material(Color::White), "K+P only");
+        assert!(!pos.has_non_pawn_material(Color::Black));
+        let pos = Position::from_fen("4k3/8/8/8/8/8/4P3/4KN2 w - - 0 1").unwrap();
+        assert!(pos.has_non_pawn_material(Color::White));
     }
 }

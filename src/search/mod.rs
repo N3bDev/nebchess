@@ -64,7 +64,6 @@ impl PvTable {
 /// extensions) are reserved so their features don't re-layout the stack.
 #[derive(Clone, Copy)]
 struct StackEntry {
-    #[allow(dead_code)] // M4
     static_eval: i32,
     current_move: Move,
     killers: [Move; 2],
@@ -262,6 +261,12 @@ impl<E: Evaluator> SearchThread<E> {
         1 - (self.nodes as i32 & 2)
     }
 
+    /// Static eval trending up vs two plies ago (same side) — margin scaler.
+    #[allow(dead_code)] // consumed by futility/RFP (Task 5)
+    fn improving(&self, ply: usize) -> bool {
+        ply >= 2 && self.stack[ply].static_eval > self.stack[ply - 2].static_eval
+    }
+
     /// 50-move rule with mate precedence: a mated side at halfmove >= 100
     /// is still mated.
     fn fifty_move_score(&mut self, ply: usize) -> i32 {
@@ -335,6 +340,14 @@ impl<E: Evaluator> SearchThread<E> {
         }
 
         let tt_move = tt_hit.as_ref().map_or(Move::NULL, |h| h.mv);
+        let in_check = self.pos.in_check(self.pos.stm());
+        // static eval: reuse the TT's cached value when present (identical by
+        // determinism), else compute; populate the stack slot (spec §5.1)
+        let static_eval = match tt_hit {
+            Some(ref h) if h.eval != tt::EVAL_NONE => h.eval,
+            _ => self.eval.evaluate(&self.pos),
+        };
+        self.stack[ply].static_eval = static_eval;
         let killers = self.stack[ply].killers;
         let stm = self.pos.stm();
         let mut picker = MovePicker::new(&self.pos, tt_move, killers, &self.history, stm);
@@ -393,7 +406,7 @@ impl<E: Evaluator> SearchThread<E> {
 
         if legal == 0 {
             // legal==0 path does NOT store to the TT (no best move to record).
-            return if self.pos.in_check(self.pos.stm()) {
+            return if in_check {
                 -(MATE - ply as i32) // checkmated at this ply
             } else {
                 self.draw_score() // stalemate
@@ -411,7 +424,7 @@ impl<E: Evaluator> SearchThread<E> {
             self.pos.key(),
             best_move,
             best,
-            tt::EVAL_NONE,
+            static_eval,
             depth,
             bound,
             ply,
