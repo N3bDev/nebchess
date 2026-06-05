@@ -57,6 +57,29 @@ impl PvTable {
     }
 }
 
+/// Per-ply search state (spec §5.1). M3 uses `killers` and `current_move`;
+/// `static_eval` (M4: RFP/improving) and `excluded_move` (M6: singular
+/// extensions) are reserved so their features don't re-layout the stack.
+#[derive(Clone, Copy)]
+struct StackEntry {
+    #[allow(dead_code)] // M4
+    static_eval: i32,
+    current_move: Move,
+    #[allow(dead_code)] // M5
+    killers: [Move; 2],
+    #[allow(dead_code)] // M6
+    excluded_move: Move,
+}
+
+impl StackEntry {
+    const EMPTY: StackEntry = StackEntry {
+        static_eval: 0,
+        current_move: Move::NULL,
+        killers: [Move::NULL; 2],
+        excluded_move: Move::NULL,
+    };
+}
+
 /// Scores generated moves once, then yields them best-first by selection.
 /// M2 ordering: captures by MVV-LVA (above all quiets), quiets unordered.
 struct MovePicker {
@@ -127,6 +150,7 @@ pub struct SearchThread<E: Evaluator> {
     deadline: Option<Instant>,
     overhead_ms: u64,
     pv: PvTable,
+    stack: Box<[StackEntry; MAX_PLY]>,
 }
 
 impl<E: Evaluator> SearchThread<E> {
@@ -141,6 +165,7 @@ impl<E: Evaluator> SearchThread<E> {
             deadline: None,
             overhead_ms: 50,
             pv: PvTable::new(),
+            stack: Box::new([StackEntry::EMPTY; MAX_PLY]),
         }
     }
 
@@ -267,6 +292,7 @@ impl<E: Evaluator> SearchThread<E> {
                 continue;
             }
             self.eval.on_make(mv, &self.pos);
+            self.stack[ply].current_move = mv;
             legal += 1;
             let score = -self.negamax(depth - 1, -beta, -alpha, ply + 1);
             self.pos.unmake();
@@ -340,6 +366,7 @@ impl<E: Evaluator> SearchThread<E> {
                 continue;
             }
             self.eval.on_make(mv, &self.pos);
+            self.stack[ply].current_move = mv;
             legal += 1;
             let score = -self.qsearch(-beta, -alpha, ply + 1);
             self.pos.unmake();
