@@ -67,7 +67,6 @@ struct StackEntry {
     #[allow(dead_code)] // M4
     static_eval: i32,
     current_move: Move,
-    #[allow(dead_code)] // M5
     killers: [Move; 2],
     #[allow(dead_code)] // M6
     excluded_move: Move,
@@ -94,7 +93,7 @@ struct MovePicker {
 const ATTACKER_VALS: [i32; 6] = [100, 320, 330, 500, 900, 10_000];
 
 impl MovePicker {
-    fn new(pos: &Position, tt_move: Move) -> MovePicker {
+    fn new(pos: &Position, tt_move: Move, killers: [Move; 2]) -> MovePicker {
         let mut moves = MoveList::new();
         generate_moves(pos, &mut moves);
         let mut scores = [0i32; 256];
@@ -109,6 +108,10 @@ impl MovePicker {
                 };
                 let attacker = pos.piece_on(mv.from()).expect("mover").piece_type();
                 1_000_000 + 10 * MATERIAL[victim.index()] - ATTACKER_VALS[attacker.index()]
+            } else if mv == killers[0] {
+                900_000
+            } else if mv == killers[1] {
+                899_999
             } else {
                 0
             };
@@ -319,7 +322,8 @@ impl<E: Evaluator> SearchThread<E> {
         }
 
         let tt_move = tt_hit.as_ref().map_or(Move::NULL, |h| h.mv);
-        let mut picker = MovePicker::new(&self.pos, tt_move);
+        let killers = self.stack[ply].killers;
+        let mut picker = MovePicker::new(&self.pos, tt_move, killers);
         let mut legal = 0u32;
         let mut best = -INF;
         let mut best_move = Move::NULL;
@@ -343,6 +347,14 @@ impl<E: Evaluator> SearchThread<E> {
                     best_move = mv;
                     self.pv.update(ply, mv);
                     if alpha >= beta {
+                        // killer update on quiet beta cutoffs only
+                        if !mv.is_capture() {
+                            let k = &mut self.stack[ply].killers;
+                            if k[0] != mv {
+                                k[1] = k[0];
+                                k[0] = mv;
+                            }
+                        }
                         break; // beta cutoff
                     }
                 }
@@ -410,7 +422,7 @@ impl<E: Evaluator> SearchThread<E> {
             stand_pat
         };
 
-        let mut picker = MovePicker::new(&self.pos, Move::NULL);
+        let mut picker = MovePicker::new(&self.pos, Move::NULL, [Move::NULL; 2]);
         let mut legal = 0u32;
         while let Some(mv) = picker.next() {
             // quiet moves only matter when evading check
@@ -497,5 +509,44 @@ impl<E: Evaluator> SearchThread<E> {
             }
         }
         Some(best)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::{movegen::find_uci_move, Position};
+
+    #[test]
+    #[allow(unused_assignments)] // captures_done is read in the assert; the final write before break is intentionally dead
+    fn picker_yields_ordering_tiers() {
+        // kiwipete: captures + plenty of quiets
+        let pos = Position::from_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        )
+        .unwrap();
+        let tt_move = find_uci_move(&pos, "a2a3").unwrap(); // arbitrary quiet as TT move
+        let k0 = find_uci_move(&pos, "a2a4").unwrap();
+        let k1 = find_uci_move(&pos, "g2g3").unwrap();
+        let mut picker = MovePicker::new(&pos, tt_move, [k0, k1]);
+        let first = picker.next().unwrap();
+        assert_eq!(first, tt_move, "TT move first even though quiet");
+        // then all captures, then exactly k0, k1, then the rest
+        let mut seen_killer0 = false;
+        let mut captures_done = false;
+        while let Some(mv) = picker.next() {
+            if mv == k0 {
+                captures_done = true;
+                seen_killer0 = true;
+                let next = picker.next().unwrap();
+                assert_eq!(next, k1, "killer1 follows killer0");
+                break;
+            }
+            assert!(
+                mv.is_capture() && !captures_done,
+                "non-capture {mv} before killers"
+            );
+        }
+        assert!(seen_killer0);
     }
 }
