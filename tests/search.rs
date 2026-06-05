@@ -278,6 +278,45 @@ fn pvs_scores_match_across_warm_research() {
     assert_eq!((b1, s1), (b2, s2), "PVS+TT re-search instability");
 }
 
+// --- Task 4: Aspiration windows tests ---
+
+#[test]
+fn aspiration_converges_on_mate_scores() {
+    // guess starts ~0 but depth-6 finds MATE-3: the window must widen out
+    // and return the exact mate, not a clamped fail-high
+    let mut st = searcher("k7/8/2K5/8/8/8/8/7R w - - 0 1");
+    let limits = Limits {
+        depth: Some(6),
+        ..Limits::default()
+    };
+    let best = st.iterate(&limits, |i| {
+        if i.depth >= 4 {
+            assert!(
+                i.score == MATE - 3 || i.score.abs() < MATE_BOUND,
+                "info must carry in-window scores only, got {}",
+                i.score
+            );
+        }
+    });
+    assert_eq!(best.unwrap().to_string(), "c6b6");
+}
+
+#[test]
+fn aspiration_iterate_remains_deterministic() {
+    let fen = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
+    let run = |fen: &str| {
+        let mut st = searcher(fen);
+        let limits = Limits {
+            depth: Some(8),
+            ..Limits::default()
+        };
+        let mut scores = Vec::new();
+        let best = st.iterate(&limits, |i| scores.push((i.depth, i.score)));
+        (best.map(|m| m.to_string()), scores)
+    };
+    assert_eq!(run(fen), run(fen));
+}
+
 // --- Task 2: Null-move pruning tests ---
 
 #[test]

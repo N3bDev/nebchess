@@ -220,12 +220,16 @@ impl<E: Evaluator> SearchThread<E> {
         self.stopped
     }
 
-    /// Fixed-depth, full-window search. Returns (best move, score).
-    /// Task 5's iterative deepening calls this once per depth.
+    /// Fixed-depth, full-window search (bench + tests + shallow ID depths).
     pub fn search_to_depth(&mut self, depth: i32) -> (Option<Move>, i32) {
+        self.search_root(depth, -INF, INF)
+    }
+
+    /// Fixed-depth search with an explicit window (aspiration re-searches).
+    fn search_root(&mut self, depth: i32, alpha: i32, beta: i32) -> (Option<Move>, i32) {
         self.eval.refresh(&self.pos);
         self.stopped = false;
-        let score = self.negamax(depth, -INF, INF, 0);
+        let score = self.negamax(depth, alpha, beta, 0);
         (self.pv.line().first().copied(), score)
     }
 
@@ -542,6 +546,29 @@ impl<E: Evaluator> SearchThread<E> {
         best
     }
 
+    /// Narrow window around the previous score; widen exponentially on fail.
+    fn aspiration(&mut self, depth: i32, guess: i32) -> (Option<Move>, i32) {
+        let mut delta = 25;
+        let mut alpha = (guess - delta).max(-INF);
+        let mut beta = (guess + delta).min(INF);
+        loop {
+            let (mv, score) = self.search_root(depth, alpha, beta);
+            if self.stopped {
+                return (mv, score);
+            }
+            if score <= alpha {
+                // fail-low: lower alpha, pull beta toward the fail point
+                beta = (alpha + beta) / 2;
+                alpha = (score - delta).max(-INF);
+            } else if score >= beta {
+                beta = (score + delta).min(INF);
+            } else {
+                return (mv, score);
+            }
+            delta *= 2; // mate-region fails widen to the full window fast
+        }
+    }
+
     /// First root move that survives the legality filter (bestmove fallback).
     fn first_legal(&mut self) -> Option<Move> {
         crate::board::movegen::find_first_legal(&mut self.pos)
@@ -564,8 +591,13 @@ impl<E: Evaluator> SearchThread<E> {
             .unwrap_or(MAX_PLY as i32 - 1)
             .clamp(1, MAX_PLY as i32 - 1);
 
+        let mut prev_score = 0;
         for depth in 1..=max_depth {
-            let (mv, score) = self.search_to_depth(depth);
+            let (mv, score) = if depth >= 4 {
+                self.aspiration(depth, prev_score)
+            } else {
+                self.search_to_depth(depth)
+            };
             if self.was_stopped() {
                 // partial iteration: only trust it at depth 1 (first full
                 // root move beats the arbitrary fallback)
@@ -577,6 +609,7 @@ impl<E: Evaluator> SearchThread<E> {
                 break;
             }
             best = mv.expect("completed iteration always has a move");
+            prev_score = score;
             info(IterInfo {
                 depth,
                 score,
