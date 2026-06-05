@@ -4,10 +4,13 @@
 
 pub mod bench;
 pub mod limits;
+pub mod tt;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+use crate::search::tt::Tt;
 
 use crate::board::{generate_moves, Move, MoveList, PieceType, Position};
 use crate::eval::psqt::MATERIAL;
@@ -151,6 +154,7 @@ pub struct SearchThread<E: Evaluator> {
     overhead_ms: u64,
     pv: PvTable,
     stack: Box<[StackEntry; MAX_PLY]>,
+    tt: Arc<Tt>,
 }
 
 impl<E: Evaluator> SearchThread<E> {
@@ -166,6 +170,7 @@ impl<E: Evaluator> SearchThread<E> {
             overhead_ms: 50,
             pv: PvTable::new(),
             stack: Box::new([StackEntry::EMPTY; MAX_PLY]),
+            tt: Arc::new(Tt::new(16)),
         }
     }
 
@@ -181,6 +186,9 @@ impl<E: Evaluator> SearchThread<E> {
     }
     pub fn set_overhead_ms(&mut self, ms: u64) {
         self.overhead_ms = ms;
+    }
+    pub fn set_tt(&mut self, tt: Arc<Tt>) {
+        self.tt = tt;
     }
 
     /// Best line from the last completed search call.
@@ -406,6 +414,7 @@ impl<E: Evaluator> SearchThread<E> {
         self.deadline = tm.hard_deadline();
         self.node_limit = limits.nodes;
         self.nodes = 0;
+        self.tt.new_search();
 
         let mut best = self.first_legal()?;
         let max_depth = limits

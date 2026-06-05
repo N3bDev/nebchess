@@ -10,6 +10,7 @@ use crate::board::movegen::find_uci_move;
 use crate::board::Position;
 use crate::eval::Hce;
 use crate::search::limits::Limits;
+use crate::search::tt::Tt;
 use crate::search::{IterInfo, SearchThread, MATE, MATE_BOUND};
 
 pub const NAME: &str = concat!("NebChess ", env!("CARGO_PKG_VERSION"));
@@ -23,6 +24,7 @@ struct Uci {
     stop: Arc<AtomicBool>,
     search: Option<JoinHandle<()>>,
     overhead_ms: u64,
+    tt: Arc<Tt>,
 }
 
 impl Uci {
@@ -32,6 +34,7 @@ impl Uci {
             stop: Arc::new(AtomicBool::new(false)),
             search: None,
             overhead_ms: 50,
+            tt: Arc::new(Tt::new(16)),
         }
     }
 
@@ -46,7 +49,7 @@ impl Uci {
                 "ucinewgame" => {
                     self.stop_and_join();
                     self.pos = Position::startpos();
-                    // M3: clear the transposition table here
+                    self.tt.clear();
                 }
                 "position" => {
                     self.stop_and_join();
@@ -120,11 +123,19 @@ impl Uci {
             }
         }
         let name = name.join(" ");
-        // Hash / Threads / MultiPV: accepted, inert until M3/M9b
-        if let ("Move Overhead", Some(v)) = (name.as_str(), value) {
-            if let Ok(ms) = v.parse::<u64>() {
-                self.overhead_ms = ms.min(5000);
+        match (name.as_str(), value) {
+            ("Move Overhead", Some(v)) => {
+                if let Ok(ms) = v.parse::<u64>() {
+                    self.overhead_ms = ms.min(5000);
+                }
             }
+            ("Hash", Some(v)) => {
+                if let Ok(mb) = v.parse::<usize>() {
+                    self.stop_and_join();
+                    self.tt = Arc::new(Tt::new(mb.clamp(1, 4096)));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -173,6 +184,7 @@ impl Uci {
         let mut st = SearchThread::new(self.pos.clone(), Hce::new());
         st.set_stop_flag(Arc::clone(&self.stop));
         st.set_overhead_ms(self.overhead_ms);
+        st.set_tt(Arc::clone(&self.tt));
         // clear the stop flag on THIS thread before spawn: a worker-side
         // clear races with a GUI 'stop' arriving right after 'go'
         self.stop.store(false, Ordering::Relaxed);

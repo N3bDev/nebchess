@@ -50,6 +50,18 @@ impl Move {
     pub const fn is_promotion(self) -> bool {
         self.flag() & 8 != 0
     }
+
+    /// Raw 16-bit encoding (engine-internal: TT storage). Round-trips with
+    /// `from_raw`; a raw value from a corrupted/collided TT entry decodes to
+    /// SOME move — consumers must validate against generated moves.
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+    #[inline]
+    pub const fn from_raw(raw: u16) -> Move {
+        Move(raw)
+    }
     /// Only valid when is_promotion().
     #[inline]
     pub const fn promotion_piece_type(self) -> PieceType {
@@ -183,6 +195,13 @@ mod tests {
         list.push(mv);
         assert_eq!(list.len(), 2);
         assert!(list.iter().all(|&m| m == mv));
+    }
+
+    #[test]
+    fn raw_roundtrip() {
+        let mv = Move::new(Square::E1, Square::G1, Move::KING_CASTLE);
+        assert_eq!(Move::from_raw(mv.raw()), mv);
+        assert_eq!(Move::from_raw(0), Move::NULL);
     }
 
     #[test]
