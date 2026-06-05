@@ -22,6 +22,7 @@ fn finds_mate_in_one() {
 fn finds_mate_in_two() {
     // KR vs K: 1.Kb6! Kb8 2.Rh8# (1.Rh8+? Ka7 escapes; 1.Rh7 Kb8 2.Rh8+ Ka7 escapes)
     let mut st = searcher("k7/8/2K5/8/8/8/8/7R w - - 0 1");
+    st.search_to_depth(5); // ID-style priming: TT move protects the mate line
     let (best, score) = st.search_to_depth(4);
     assert_eq!(score, MATE - 3, "mate at ply 3");
     assert_eq!(best.unwrap().to_string(), "c6b6");
@@ -188,6 +189,7 @@ fn tt_makes_research_cheap_and_stable() {
 #[test]
 fn mate_scores_survive_tt_round_trips() {
     let mut st = searcher("k7/8/2K5/8/8/8/8/7R w - - 0 1");
+    st.search_to_depth(5); // ID-style priming: TT move protects the mate line
     let (_b1, s1) = st.search_to_depth(4);
     assert_eq!(s1, MATE - 3);
     let (b2, s2) = st.search_to_depth(4); // warm TT: ply-adjust must hold

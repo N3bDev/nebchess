@@ -378,6 +378,7 @@ impl<E: Evaluator> SearchThread<E> {
         let stm = self.pos.stm();
         let mut picker = MovePicker::new(&self.pos, tt_move, killers, &self.history, stm);
         let mut legal = 0u32;
+        let mut quiet_count = 0u32;
         let mut best = -INF;
         let mut best_move = Move::NULL;
         let mut first = true;
@@ -391,10 +392,21 @@ impl<E: Evaluator> SearchThread<E> {
             let score = if first {
                 -self.negamax(depth - 1, -beta, -alpha, ply + 1)
             } else {
-                // scout: prove the move can't beat alpha with a null window
-                let zw = -self.negamax(depth - 1, -alpha - 1, -alpha, ply + 1);
-                if zw > alpha && zw < beta {
-                    // surprise: re-search with the real window
+                // LMR: late quiets get a reduced-depth scout; surprises get
+                // re-searched at full depth before the full-window re-search
+                let mut r = 0;
+                if !in_check && !mv.is_capture() && !mv.is_promotion() {
+                    quiet_count += 1;
+                    let is_killer = mv == killers[0] || mv == killers[1];
+                    if depth >= 3 && quiet_count >= 3 && !is_killer {
+                        r = 1 + i32::from(quiet_count >= 8) + i32::from(depth >= 8);
+                    }
+                }
+                let mut zw = -self.negamax(depth - 1 - r, -alpha - 1, -alpha, ply + 1);
+                if r > 0 && zw > alpha && !self.stopped {
+                    zw = -self.negamax(depth - 1, -alpha - 1, -alpha, ply + 1);
+                }
+                if zw > alpha && zw < beta && !self.stopped {
                     -self.negamax(depth - 1, -beta, -alpha, ply + 1)
                 } else {
                     zw
