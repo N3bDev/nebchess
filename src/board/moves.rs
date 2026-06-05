@@ -115,6 +115,10 @@ impl MoveList {
     pub fn as_slice(&self) -> &[Move] {
         &self.moves[..self.len]
     }
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [Move] {
+        &mut self.moves[..self.len]
+    }
 }
 
 impl Default for MoveList {
@@ -179,5 +183,17 @@ mod tests {
         list.push(mv);
         assert_eq!(list.len(), 2);
         assert!(list.iter().all(|&m| m == mv));
+    }
+
+    #[test]
+    fn as_mut_slice_allows_reordering() {
+        let mut list = MoveList::new();
+        let a = Move::new(Square::E1, Square::G1, Move::KING_CASTLE);
+        let b = Move::new(Square::A1, Square::H8, Move::QUIET);
+        list.push(a);
+        list.push(b);
+        list.as_mut_slice().swap(0, 1);
+        assert_eq!(list.as_slice()[0], b);
+        assert_eq!(list.as_slice()[1], a);
     }
 }
