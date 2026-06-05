@@ -677,7 +677,8 @@ fn node_limit_stops_search() {
 fn fifty_move_draw_scored_in_search() {
     // halfmove already at 100: any deeper node should resolve as draw-ish.
     // KQ vs K would otherwise be a huge score; the rule caps it.
-    let mut st = searcher("7k/8/5Q2/8/8/8/8/K7 w - - 100 90");
+    // (Black king on a8: NOT attacked by Qf6 — the position must be legal.)
+    let mut st = searcher("k7/8/5Q2/8/8/8/8/K7 w - - 100 90");
     let (_best, score) = st.search_to_depth(3);
     // root itself is exempt (ply 0); children all return draw — score ~0,
     // far below the +900-ish a live queen would give
@@ -894,6 +895,12 @@ impl<E: Evaluator> SearchThread<E> {
         if self.should_stop() {
             return 0;
         }
+        // stm has no king: unreachable through legal make() flows, but GUI
+        // FENs can be illegal (enemy king en prise). Score as already-mated
+        // (stm-relative) so the capturer prefers it — and never crash.
+        if self.pos.piece_bb(self.pos.stm(), PieceType::King).is_empty() {
+            return -(MATE - ply as i32);
+        }
         if ply > 0 {
             if self.pos.is_repetition() {
                 return self.draw_score();
@@ -951,6 +958,10 @@ impl<E: Evaluator> SearchThread<E> {
         self.nodes += 1;
         if self.should_stop() {
             return 0;
+        }
+        // see negamax: never-crash guard for illegal (en-prise-king) inputs
+        if self.pos.piece_bb(self.pos.stm(), PieceType::King).is_empty() {
+            return -(MATE - ply as i32);
         }
         if ply >= MAX_PLY - 1 {
             return self.eval.evaluate(&self.pos);
