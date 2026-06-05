@@ -12,6 +12,11 @@
 
 **Plan 1 carry-ins (final review):** (a) lift the UCI move resolver out of `src/bin/perft.rs` into the lib; (b) key-history + repetition/50-move node-prologue plumbing; (c) the deferred M0 "2-engine smoke match" gate runs here, first thing after the engine binary exists.
 
+**Executed-review amendments (code as landed differs from the blocks below in these ways):**
+- T4: negamax counts only interior nodes (qsearch owns the horizon — fixes 2x node inflation); no-king guard returns -(MATE-ply) (see synced code blocks).
+- T5/T6 (CRITICAL race fix): the stop-flag clear moved OUT of `iterate()` (worker thread) INTO `cmd_go` on the main thread before spawn — a worker-side clear races with an instant GUI `stop` and deadlocked `go infinite` (reproduced 40/40, fixed 200/200). `iterate`'s doc now states the caller owns flag hygiene.
+- T6: `print_info` emits one buffered println (line-tearing window); `stop_and_join` prints a fallback bestmove if the worker panicked (GUI is owed one per go); `find_first_legal` lifted to `board::movegen` (shared by search + the fallback); the go-stop gate is zero-delay plus a 25-round `zero_delay_stop_never_hangs` watchdog test.
+
 **Plan deviations from spec (recorded deliberately):**
 - §5.2 lists SEE-based qsearch pruning and delta pruning among "core" — M2 ships qsearch with MVV-LVA ordering only; SEE and delta pruning are M3/M4 SPRT-gated features (per §12's per-feature methodology).
 - §5.4's PV-instability/fail-low time extensions are deferred to M4 (individually SPRT-testable); M2 ships soft/hard limits + node-cadence polling + Move Overhead.
