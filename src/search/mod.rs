@@ -366,26 +366,18 @@ impl<E: Evaluator> SearchThread<E> {
 
     /// First root move that survives the legality filter (bestmove fallback).
     fn first_legal(&mut self) -> Option<Move> {
-        let mut list = MoveList::new();
-        generate_moves(&self.pos, &mut list);
-        for &mv in list.iter() {
-            if self.pos.make(mv) {
-                self.pos.unmake();
-                return Some(mv);
-            }
-        }
-        None
+        crate::board::movegen::find_first_legal(&mut self.pos)
     }
 
     /// Iterative deepening driver. Returns None only when the root has no
     /// legal moves (mate/stalemate already on the board).
     /// `info` is called after every COMPLETED iteration.
+    /// NOTE: the caller owns stop-flag hygiene — clear it BEFORE spawning the search thread (a worker-side clear races with an early external stop).
     pub fn iterate(&mut self, limits: &Limits, mut info: impl FnMut(IterInfo)) -> Option<Move> {
         let tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms);
         self.deadline = tm.hard_deadline();
         self.node_limit = limits.nodes;
         self.nodes = 0;
-        self.stop.store(false, Ordering::Relaxed);
 
         let mut best = self.first_legal()?;
         let max_depth = limits

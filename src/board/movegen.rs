@@ -145,6 +145,19 @@ fn castling_moves(pos: &Position, list: &mut MoveList, stm: Color, occ: Bitboard
     }
 }
 
+/// First legal move in the position, if any (make/unmake probe).
+pub fn find_first_legal(pos: &mut Position) -> Option<Move> {
+    let mut list = MoveList::new();
+    generate_moves(pos, &mut list);
+    for &mv in list.iter() {
+        if pos.make(mv) {
+            pos.unmake();
+            return Some(mv);
+        }
+    }
+    None
+}
+
 /// Resolves a UCI long-algebraic string ("e2e4", "e7e8q", castling as "e1g1")
 /// against the pseudo-legal move list. Returns None for unknown strings.
 /// NOTE: pseudo-legal resolution — the caller still validates via make().
@@ -275,6 +288,16 @@ mod tests {
         let uci: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
         assert!(uci.contains(&"e2e3".to_string()));
         assert!(!uci.contains(&"e2e4".to_string()));
+    }
+
+    #[test]
+    fn find_first_legal_startpos_and_stalemate() {
+        // startpos has legal moves
+        let mut pos = Position::startpos();
+        assert!(find_first_legal(&mut pos).is_some());
+        // stalemate FEN: black to move, no legal moves
+        let mut pos = Position::from_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        assert!(find_first_legal(&mut pos).is_none());
     }
 
     #[test]
