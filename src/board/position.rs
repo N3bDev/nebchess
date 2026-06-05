@@ -25,6 +25,7 @@ impl std::fmt::Display for FenError {
 }
 impl std::error::Error for FenError {}
 
+#[derive(Clone)]
 pub(crate) struct Undo {
     pub mv: Move,
     pub captured: Option<Piece>,
@@ -34,6 +35,7 @@ pub(crate) struct Undo {
     pub key: u64,
 }
 
+#[derive(Clone)]
 pub struct Position {
     pub(crate) pieces: [Bitboard; 12],
     pub(crate) occ: [Bitboard; 2],
@@ -46,6 +48,7 @@ pub struct Position {
     pub(crate) fullmove: u16,
     pub(crate) key: u64,
     pub(crate) undo_stack: Vec<Undo>,
+    pub(crate) key_history: Vec<u64>,
 }
 
 impl Position {
@@ -62,6 +65,7 @@ impl Position {
             fullmove: 1,
             key: 0,
             undo_stack: Vec::with_capacity(256),
+            key_history: Vec::with_capacity(256),
         }
     }
 
@@ -355,6 +359,7 @@ impl Position {
             halfmove: self.halfmove,
             key: self.key,
         });
+        self.key_history.push(self.key);
 
         let mover = self.mailbox[from.index()].expect("make: empty from-square");
         debug_assert_eq!(mover.color(), stm);
@@ -453,6 +458,7 @@ impl Position {
     /// Exactly reverses the last make(). Key/castling/ep/halfmove restored
     /// from the undo record; piece moves reversed with raw (keyless) ops.
     pub fn unmake(&mut self) {
+        self.key_history.pop();
         let u = self.undo_stack.pop().expect("unmake: empty undo stack");
         let mv = u.mv;
         let flag = mv.flag();
@@ -505,6 +511,29 @@ impl Position {
         self.ep = u.ep;
         self.halfmove = u.halfmove;
         self.key = u.key;
+    }
+
+    /// Has the current position occurred before within the reversible-move
+    /// window? (Twofold; search treats this as a draw, spec §3.)
+    pub fn is_repetition(&self) -> bool {
+        let n = self.key_history.len();
+        let lookback = (self.halfmove as usize).min(n);
+        // same side to move only: ancestors at distance 2, 4, ...
+        let mut d = 2;
+        while d <= lookback {
+            if self.key_history[n - d] == self.key {
+                return true;
+            }
+            d += 2;
+        }
+        false
+    }
+
+    /// 50-move rule (100 halfmoves). Mate-precedence is the caller's job:
+    /// a mated side at halfmove >= 100 is still mated (search checks moves).
+    #[inline]
+    pub fn is_fifty_move_draw(&self) -> bool {
+        self.halfmove >= 100
     }
 }
 
@@ -794,5 +823,55 @@ mod tests {
             "ep parsed"
         );
         assert_make_unmake(fen, mv(&pos, "e5", "d6", Move::EN_PASSANT), false);
+    }
+
+    #[test]
+    fn repetition_detected_via_history() {
+        let mut pos = Position::startpos();
+        assert!(!pos.is_repetition());
+        // Ng1f3 Ng8f6 Nf3g1 Nf6g8 -> startpos repeated (one fold)
+        for (f, t) in [("g1", "f3"), ("g8", "f6"), ("f3", "g1"), ("f6", "g8")] {
+            assert!(pos.make(mv(&pos, f, t, Move::QUIET)));
+        }
+        assert!(pos.is_repetition(), "back at startpos: repetition");
+        pos.unmake();
+        assert!(!pos.is_repetition());
+    }
+
+    #[test]
+    fn pawn_move_cuts_repetition_scope() {
+        let mut pos = Position::startpos();
+        assert!(pos.make(mv(&pos, "e2", "e4", Move::DOUBLE_PUSH)));
+        assert!(pos.make(mv(&pos, "e7", "e5", Move::DOUBLE_PUSH)));
+        // shuffle knights back to the post-e4e5 position
+        for (f, t) in [("g1", "f3"), ("g8", "f6"), ("f3", "g1"), ("f6", "g8")] {
+            assert!(pos.make(mv(&pos, f, t, Move::QUIET)));
+        }
+        assert!(pos.is_repetition(), "post-e4e5 position repeated");
+        // but startpos itself is NOT reachable as a repetition (pawn moves reset)
+        // halfmove clock is 4 here; history scan must not cross the e7e5 boundary
+        assert_eq!(pos.halfmove(), 4);
+    }
+
+    #[test]
+    fn history_survives_clone_and_unmake_restores_len() {
+        let mut pos = Position::startpos();
+        assert!(pos.make(mv(&pos, "g1", "f3", Move::QUIET)));
+        let snapshot = pos.clone();
+        assert_eq!(snapshot.key(), pos.key());
+        assert!(pos.make(mv(&pos, "g8", "f6", Move::QUIET)));
+        pos.unmake();
+        assert_eq!(pos.key(), snapshot.key());
+        assert!(!pos.is_repetition());
+    }
+
+    #[test]
+    fn fifty_move_counter_draw_helper() {
+        // artificial position with halfmove=99: one quiet move crosses 100
+        let mut pos = Position::from_fen("4k3/8/8/8/8/8/8/R3K3 w Q - 99 80").unwrap();
+        assert!(!pos.is_fifty_move_draw());
+        assert!(pos.make(mv(&pos, "a1", "a2", Move::QUIET)));
+        assert_eq!(pos.halfmove(), 100);
+        assert!(pos.is_fifty_move_draw());
     }
 }
