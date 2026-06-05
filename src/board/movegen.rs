@@ -145,6 +145,15 @@ fn castling_moves(pos: &Position, list: &mut MoveList, stm: Color, occ: Bitboard
     }
 }
 
+/// Resolves a UCI long-algebraic string ("e2e4", "e7e8q", castling as "e1g1")
+/// against the pseudo-legal move list. Returns None for unknown strings.
+/// NOTE: pseudo-legal resolution — the caller still validates via make().
+pub fn find_uci_move(pos: &Position, uci: &str) -> Option<Move> {
+    let mut list = MoveList::new();
+    generate_moves(pos, &mut list);
+    list.iter().copied().find(|mv| mv.to_string() == uci)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +275,30 @@ mod tests {
         let uci: Vec<String> = moves.iter().map(|m| m.to_string()).collect();
         assert!(uci.contains(&"e2e3".to_string()));
         assert!(!uci.contains(&"e2e4".to_string()));
+    }
+
+    #[test]
+    fn find_uci_move_resolves_and_rejects() {
+        let pos = Position::startpos();
+        let mv = find_uci_move(&pos, "e2e4").expect("e2e4 exists");
+        assert_eq!(mv.flag(), Move::DOUBLE_PUSH);
+        assert!(
+            find_uci_move(&pos, "e2e5").is_none(),
+            "not a legal move shape"
+        );
+        assert!(find_uci_move(&pos, "zzzz").is_none());
+        // promotion suffix resolves to the right flag
+        let pos = Position::from_fen("1n2k3/2P5/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let q = find_uci_move(&pos, "c7c8q").unwrap();
+        assert!(q.is_promotion() && !q.is_capture());
+        let n = find_uci_move(&pos, "c7b8n").unwrap();
+        assert!(n.is_promotion() && n.is_capture());
+        assert_eq!(n.promotion_piece_type(), crate::board::PieceType::Knight);
+        // castle resolves to the castle flag, not a quiet king move
+        let pos = Position::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
+        assert_eq!(
+            find_uci_move(&pos, "e1g1").unwrap().flag(),
+            Move::KING_CASTLE
+        );
     }
 }

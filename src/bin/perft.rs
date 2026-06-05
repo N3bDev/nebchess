@@ -2,21 +2,8 @@
 //!   perft "<fen>|startpos" <depth> [uci_move ...]
 //! Prints one "uci: count" line per root move, then "total: N".
 
-use nebchess::board::{generate_moves, MoveList, Position};
-
-fn apply_uci_move(pos: &mut Position, uci: &str) -> Result<(), String> {
-    let mut list = MoveList::new();
-    generate_moves(pos, &mut list);
-    for &mv in list.iter() {
-        if mv.to_string() == uci {
-            if pos.make(mv) {
-                return Ok(());
-            }
-            return Err(format!("illegal move: {uci}"));
-        }
-    }
-    Err(format!("unknown move: {uci}"))
-}
+use nebchess::board::movegen::find_uci_move;
+use nebchess::board::Position;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,9 +24,16 @@ fn main() {
         std::process::exit(2);
     });
     for uci in &args[2..] {
-        if let Err(e) = apply_uci_move(&mut pos, uci) {
-            eprintln!("{e}");
-            std::process::exit(2);
+        match find_uci_move(&pos, uci) {
+            Some(mv) if pos.make(mv) => {}
+            Some(_) => {
+                eprintln!("illegal move: {uci}");
+                std::process::exit(2);
+            }
+            None => {
+                eprintln!("unknown move: {uci}");
+                std::process::exit(2);
+            }
         }
     }
     if depth == 0 {
