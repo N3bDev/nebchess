@@ -17,5 +17,6 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | Aspiration windows | lmr | [0,10] | 402 | 149-66-187 | **H1: +72.8 ±25.0** (0 timeouts; LMR synergy) | 212534 |
 | 2026-06-05 | RFP + futility (d<=2 after canary fix) | aspiration | [0,10] | 300 | 122-36-142 | **H1: +102.5 ±28.4** (tactics canary: 266/299 ✓ — see tactics-log incident) | 97369 |
 | 2026-06-05 | Quiescence TT | futility | [0,5] | 1488 | 421-274-793 | **H1: +34.4 ±11.8** (canary 266 ✓) | 85636 |
+| 2026-06-05 | **Texel-tuned PST+material** (first learned eval) | qsearch-tt | [0,5] | 416 | 286-59-71 | **H1: +212.7 ±35.4** — largest gain in project history; WAC −8 accepted as the documented trade | 138119 |
 
 **M3 cumulative: +384.4 measured self-play elo over M2** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only).
