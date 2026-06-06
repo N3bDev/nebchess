@@ -46,13 +46,21 @@ matchmaking:                 # the bot seeks out and challenges other bots
   challenge_variant: "standard"
   challenge_mode: "rated"    # play rated games so the bot establishes a real rating
   challenge_timeout: 5       # minutes idle before creating a new challenge
-  challenge_initial_time:    # base time (seconds) chosen at random per challenge
-    - 180                    # 3+2
-    - 300                    # 5+2
-  challenge_increment:
-    - 2
   opponent_rating_difference: 300  # only challenge bots within +/- 300 of our rating
   rating_preference: "none"
+  # Default spec = 5+3. On each challenge lichess-bot randomly picks either this
+  # default or one of the overrides below, so every game is 5+3 or 3+2 -- both in
+  # Lichess's blitz pool, giving one rating to calibrate.
+  challenge_initial_time:
+    - 300                    # 5 min base
+  challenge_increment:
+    - 3                      # -> 5+3
+  overrides:
+    blitz_3_2:
+      challenge_initial_time:
+        - 180                # 3 min base
+      challenge_increment:
+        - 2                  # -> 3+2
 
 greeting:
   hello: "Hi! I'm NebChess, a from-scratch Rust engine. gl hf!"
