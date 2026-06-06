@@ -89,8 +89,35 @@ pub const TERMS: &[TermDef] = &[
         name: "KS_SEMI_FILE",
         len: 1,
     }, // no own pawns on a file near the king
-       // T5 appends: THREAT_BY_PAWN(4) THREAT_BY_MINOR(4) HANGING(1)
-       //             BISHOP_PAIR(1) ROOK_OPEN(1) ROOK_SEMI(1) TEMPO(1)
+    // T5: threats, coordination, tempo
+    TermDef {
+        name: "THREAT_BY_PAWN",
+        len: 4,
+    }, // pawn attacks an enemy N/B/R/Q
+    TermDef {
+        name: "THREAT_BY_MINOR",
+        len: 4,
+    }, // minor (N/B) attacks an enemy N/B/R/Q
+    TermDef {
+        name: "HANGING",
+        len: 1,
+    }, // enemy piece attacked by us, undefended
+    TermDef {
+        name: "BISHOP_PAIR",
+        len: 1,
+    }, // two or more bishops
+    TermDef {
+        name: "ROOK_OPEN",
+        len: 1,
+    }, // rook on a fully open file
+    TermDef {
+        name: "ROOK_SEMI",
+        len: 1,
+    }, // rook on a semi-open file (no own pawns)
+    TermDef {
+        name: "TEMPO",
+        len: 1,
+    }, // side-to-move initiative bonus
 ];
 
 const fn str_eq(a: &str, b: &str) -> bool {
@@ -155,4 +182,12 @@ pub const KS_ATTACKER: usize = offset_of("KS_ATTACKER");
 pub const KS_SHIELD: usize = offset_of("KS_SHIELD");
 pub const KS_OPEN_FILE: usize = offset_of("KS_OPEN_FILE");
 pub const KS_SEMI_FILE: usize = offset_of("KS_SEMI_FILE");
+// T5 threats / coordination / tempo offsets
+pub const THREAT_BY_PAWN: usize = offset_of("THREAT_BY_PAWN");
+pub const THREAT_BY_MINOR: usize = offset_of("THREAT_BY_MINOR");
+pub const HANGING: usize = offset_of("HANGING");
+pub const BISHOP_PAIR: usize = offset_of("BISHOP_PAIR");
+pub const ROOK_OPEN: usize = offset_of("ROOK_OPEN");
+pub const ROOK_SEMI: usize = offset_of("ROOK_SEMI");
+pub const TEMPO: usize = offset_of("TEMPO");
 pub const TOTAL_PAIRS: usize = total_pairs();

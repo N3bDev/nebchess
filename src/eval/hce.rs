@@ -182,7 +182,6 @@ fn pawn_attack_set(pos: &Position, color: Color) -> Bitboard {
 /// mask); `minor` is the knight+bishop union; `all` is the full union of pawn,
 /// knight, bishop, rook, queen AND king attacks. `minor`/`all` are produced now
 /// so no slider attack is recomputed when step 5.2 adds threat/hanging terms.
-#[allow(dead_code)] // minor/all are read by the step 5.2 threat terms
 struct AttackMaps {
     pawn: [Bitboard; 2],
     minor: [Bitboard; 2],
@@ -366,6 +365,78 @@ fn king_shield_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mu
     }
 }
 
+// ---- T5: threats, coordination, tempo ----
+
+/// Threats (pawn / minor attacks on enemy pieces, hanging pieces), coordination
+/// (bishop pair, rook open/semi files), and the side-to-move tempo bonus.
+///
+/// CONSUMES the shared `AttackMaps` built by the fused `mobility_and_attackers`
+/// pass (step 5.0): `maps.pawn[c]` (pawn attack set), `maps.minor[c]`
+/// (knight+bishop union), `maps.all[c]` (full union incl. king & pawn). No
+/// slider attack is recomputed here — the maps already hold every union this
+/// term needs. Not pawn-cacheable (depends on the full board) -> runs fresh in
+/// `Hce::evaluate` AND the tuner path (`eval_terms`), like mobility / king safety.
+///
+/// SIGN: each per-color record credits the attacker's color (white +1, black
+/// -1), so threats/coordination by White come out positive and by Black
+/// negative — the tuner learns the magnitude. TEMPO records the side-to-move's
+/// sign once for the whole position (NOT inside the color loop).
+fn threat_terms<T: Tracer>(
+    pos: &Position,
+    maps: &AttackMaps,
+    t: &mut T,
+    mg: &mut i32,
+    eg: &mut i32,
+) {
+    for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
+        let ci = color.index();
+        let enemy = color.flip();
+        // OUR threats against THEIR pieces (one record per threatened piece).
+        let our_pawn_att = maps.pawn[ci];
+        let our_minor_att = maps.minor[ci];
+        for (pt, slot) in [
+            (PieceType::Knight, 0),
+            (PieceType::Bishop, 1),
+            (PieceType::Rook, 2),
+            (PieceType::Queen, 3),
+        ] {
+            let victims = pos.piece_bb(enemy, pt);
+            for _ in our_pawn_att & victims {
+                add_term(m::THREAT_BY_PAWN + slot, sign, t, mg, eg);
+            }
+            for _ in our_minor_att & victims {
+                add_term(m::THREAT_BY_MINOR + slot, sign, t, mg, eg);
+            }
+        }
+        // THEIR hanging pieces: attacked by us, defended by no one (king excluded
+        // — a king on an attacked square is illegal, never "hanging").
+        let our_att = maps.all[ci];
+        let their_att = maps.all[enemy.index()];
+        let their_pieces = pos.occ(enemy) & !pos.piece_bb(enemy, PieceType::King);
+        for _ in their_pieces & our_att & !their_att {
+            add_term(m::HANGING, sign, t, mg, eg);
+        }
+        // Coordination: bishop pair.
+        if pos.piece_bb(color, PieceType::Bishop).count() >= 2 {
+            add_term(m::BISHOP_PAIR, sign, t, mg, eg);
+        }
+        // Coordination: rooks on open / semi-open files.
+        let own_pawns = pos.piece_bb(color, PieceType::Pawn);
+        let all_pawns = own_pawns | pos.piece_bb(enemy, PieceType::Pawn);
+        for sq in pos.piece_bb(color, PieceType::Rook) {
+            let fbb = file_mask(sq.file());
+            if (all_pawns & fbb).is_empty() {
+                add_term(m::ROOK_OPEN, sign, t, mg, eg);
+            } else if (own_pawns & fbb).is_empty() {
+                add_term(m::ROOK_SEMI, sign, t, mg, eg);
+            }
+        }
+    }
+    // Tempo: the side to move has the initiative (recorded once, white-relative).
+    let stm_sign = if pos.stm() == Color::White { 1 } else { -1 };
+    add_term(m::TEMPO, stm_sign, t, mg, eg);
+}
+
 /// White-relative (mg, eg) accumulation over all terms.
 /// This path is UNCACHED — used by the tuner (CollectingTracer) and as the
 /// reference for the transparency test. The engine's Hce::evaluate uses a
@@ -394,12 +465,13 @@ pub fn eval_terms<T: Tracer>(pos: &Position, t: &mut T) -> (i32, i32) {
     // T2: pawn structure (uncached — tuner path)
     pawn_terms(pos, t, &mut mg, &mut eg);
     // T3+T4 attacker half: one attack computation per piece feeds mobility AND
-    // the king-zone-attacker records; the returned unions feed step 5.2 threats.
-    let _attack_maps = mobility_and_attackers(pos, t, &mut mg, &mut eg);
+    // the king-zone-attacker records; the returned unions feed the T5 threats.
+    let attack_maps = mobility_and_attackers(pos, t, &mut mg, &mut eg);
     // T4: king safety, shield/open-file half (not pawn-cacheable — keys off the
     // king square).
     king_shield_terms(pos, t, &mut mg, &mut eg);
-    // T5 threats append here (will consume `_attack_maps`)
+    // T5: threats, coordination, tempo — consumes the shared attack maps.
+    threat_terms(pos, &attack_maps, t, &mut mg, &mut eg);
     (mg, eg)
 }
 
@@ -501,9 +573,16 @@ impl Evaluator for Hce {
         // fresh (NullTracer = zero cost) through the SAME fused pass eval_terms
         // uses, so the engine path matches the tuner path exactly.
         let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
-        let _attack_maps =
+        let attack_maps =
             mobility_and_attackers(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
         king_shield_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+        threat_terms(
+            pos,
+            &attack_maps,
+            &mut NullTracer,
+            &mut fresh_mg,
+            &mut fresh_eg,
+        );
         let white = blend(np_mg + pw_mg + fresh_mg, np_eg + pw_eg + fresh_eg, ph);
         if pos.stm() == Color::White {
             white
@@ -548,23 +627,58 @@ mod tests {
 
     #[test]
     fn startpos_is_balanced() {
+        // Material + PST + structure are perfectly symmetric in the start
+        // position, so the ONLY residual is the T5 TEMPO bonus the side to move
+        // gets. Startpos has full phase (24), so the blended tempo is exactly
+        // the mg tempo weight. The position stays "balanced" in the sense that
+        // both side-to-move variants give the SAME magnitude (the symmetry guard
+        // this test exists for); the shared value is the tempo bonus, not 0.
         let mut e = Hce::new();
         let pos = Position::startpos();
-        assert_eq!(e.evaluate(&pos), 0, "symmetric position must be 0");
+        let tempo_mg = PARAMS[manifest::TEMPO].0;
+        assert_eq!(
+            e.evaluate(&pos),
+            tempo_mg,
+            "symmetric startpos scores exactly the (full-phase) tempo bonus"
+        );
+        // Flipping only the side to move must mirror the score (everything but
+        // tempo is symmetric): Black-to-move startpos scores the same magnitude.
+        let black_stm =
+            Position::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1").unwrap();
+        assert_eq!(
+            e.evaluate(&black_stm),
+            tempo_mg,
+            "stm flip preserves the tempo-only residual"
+        );
     }
 
     #[test]
     fn eval_is_stm_relative() {
-        // same physical position, both side-to-move variants: scores negate
-        // NOTE: since mg==eg in the seed (no tapering divergence), the eval is
-        // phase-independent, so stm negation holds exactly at this seed stage.
+        // Same physical position, both side-to-move variants. Before T5 these
+        // scores negated EXACTLY. The T5 TEMPO term breaks strict negation BY
+        // DESIGN: it adds the mover's tempo to the white-relative score, so the
+        // base position score cancels in (sw + sb) but TWO tempo bonuses remain:
+        //   sw = +base + tempo_blend       (white to move, returned as-is)
+        //   sb = -(+base - tempo_blend)    (black to move, negated on return)
+        //   sw + sb = 2 * tempo_blend
+        // So we assert the residual is small and bounded by 2x the BLENDED tempo
+        // weight (derived from PARAMS so it survives retunes), NOT exact negation.
         let w = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1";
         let b = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+        let pw = Position::from_fen(w).unwrap();
         let mut e = Hce::new();
-        let sw = e.evaluate(&Position::from_fen(w).unwrap());
+        let sw = e.evaluate(&pw);
         let sb = e.evaluate(&Position::from_fen(b).unwrap());
-        assert_eq!(sw, -sb);
-        // e2->e4 is a PST improvement for White
+        // Expected residual: exactly 2x the blended tempo bonus (+2 slack for the
+        // integer rounding in `blend`).
+        let (tmg, teg) = PARAMS[manifest::TEMPO];
+        let bound = 2 * blend(tmg, teg, phase(&pw)).abs() + 2;
+        assert!(
+            (sw + sb).abs() <= bound,
+            "stm-relative residual must be bounded by 2x tempo (={bound}), got sw={sw} sb={sb} sum={}",
+            sw + sb
+        );
+        // e2->e4 is a PST improvement for White (plus White's tempo)
         assert!(sw > 0, "White improved by e4, White to move: positive");
     }
 
@@ -811,9 +925,10 @@ mod tests {
                     let np = eval_non_pawn_terms(&pos);
                     let pw = pawn_terms_cached(&mut hce.pawn_hash, &pos);
                     let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
-                    let _ =
+                    let amaps =
                         mobility_and_attackers(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
                     king_shield_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+                    threat_terms(&pos, &amaps, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
                     blend(np.0 + pw.0 + fresh_mg, np.1 + pw.1 + fresh_eg, ph)
                 };
                 if pos.stm() == Color::White {
@@ -1079,6 +1194,90 @@ mod tests {
         assert!(
             attackers.contains(&(manifest::KS_ATTACKER + 2)),
             "the black rook (slot 2) attacks the zone, got {attackers:?}"
+        );
+    }
+
+    // ---- Step 5.3: threats / coordination / tempo trace tests ----
+
+    /// A white pawn on e4 attacks the black knight on d5 -> exactly one
+    /// THREAT_BY_PAWN+0 (victim = knight, slot 0) with sign +1. (The knight is
+    /// also undefended, so a HANGING record exists too; this test scopes the
+    /// THREAT_BY_PAWN table only.)
+    #[test]
+    fn pawn_attacks_knight_records_threat() {
+        let fen = "4k3/8/8/3n4/4P3/8/8/4K3 w - - 0 1";
+        let recs = records_in_table(fen, manifest::THREAT_BY_PAWN, 4);
+        assert_eq!(
+            recs,
+            vec![(manifest::THREAT_BY_PAWN, 1i8)],
+            "white pawn e4 attacks the black knight d5: one THREAT_BY_PAWN+0, sign +1"
+        );
+        // No minor-threat records (the black knight d5 attacks no white piece).
+        assert!(
+            records_in_table(fen, manifest::THREAT_BY_MINOR, 4).is_empty(),
+            "no minor threats in this position"
+        );
+    }
+
+    /// An undefended black rook on d4 is attacked by a white bishop on b2
+    /// (b2-c3-d4 diagonal, c3 empty). Records: THREAT_BY_MINOR+2 (rook slot = 2,
+    /// sign +1) and exactly one HANGING (+1) — the rook is attacked by White and
+    /// defended by nobody.
+    #[test]
+    fn undefended_rook_attacked_by_bishop() {
+        let fen = "4k3/8/8/8/3r4/8/1B6/4K3 w - - 0 1";
+        let minor = records_in_table(fen, manifest::THREAT_BY_MINOR, 4);
+        assert_eq!(
+            minor,
+            vec![(manifest::THREAT_BY_MINOR + 2, 1i8)],
+            "white bishop attacks the black rook: one THREAT_BY_MINOR+2 (rook), sign +1"
+        );
+        // The black rook is the only hanging piece (attacked, undefended).
+        let hanging = features_at(fen, manifest::HANGING);
+        assert_eq!(
+            hanging,
+            vec![1i8],
+            "the undefended black rook is hanging: one HANGING record, sign +1"
+        );
+    }
+
+    /// Startpos coordination/tempo records: BISHOP_PAIR fires once per side
+    /// (one +1 white, one -1 black -> net 0); no rook sits on an open file
+    /// (every file carries a pawn); TEMPO is +1 (White to move).
+    #[test]
+    fn startpos_bishop_pair_and_tempo() {
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let mut bishop_pair = features_at(fen, manifest::BISHOP_PAIR);
+        bishop_pair.sort_unstable();
+        assert_eq!(
+            bishop_pair,
+            vec![-1i8, 1i8],
+            "both sides have the bishop pair: one +1 and one -1 (net 0)"
+        );
+        assert!(
+            features_at(fen, manifest::ROOK_OPEN).is_empty(),
+            "no open files in the start position"
+        );
+        assert!(
+            features_at(fen, manifest::ROOK_SEMI).is_empty(),
+            "no semi-open files in the start position"
+        );
+        assert_eq!(
+            features_at(fen, manifest::TEMPO),
+            vec![1i8],
+            "White to move -> TEMPO +1"
+        );
+    }
+
+    /// Tempo sign follows the side to move: the same board with Black to move
+    /// records TEMPO -1 (and only once).
+    #[test]
+    fn tempo_follows_side_to_move() {
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1";
+        assert_eq!(
+            features_at(fen, manifest::TEMPO),
+            vec![-1i8],
+            "Black to move -> TEMPO -1"
         );
     }
 }

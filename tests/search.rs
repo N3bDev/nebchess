@@ -301,6 +301,8 @@ fn aspiration_converges_on_mate_scores() {
         depth: Some(6),
         ..Limits::default()
     };
+    // Track the final-depth root score so we can assert the exact mate below.
+    let mut last_score = 0;
     let best = st.iterate(&limits, |i| {
         if i.depth >= 4 {
             assert!(
@@ -309,8 +311,23 @@ fn aspiration_converges_on_mate_scores() {
                 i.score
             );
         }
+        last_score = i.score;
     });
-    assert_eq!(best.unwrap().to_string(), "c6b6");
+    // The real invariant: aspiration widened out to the EXACT mate (not a clamped
+    // fail-high). The root best move is one of the equally-fast KRK king moves
+    // (Kb6 / Kc7) — which one wins is an incidental eval tie-break that shifts
+    // with every retune (the T5 terms moved it), so accept either optimal move
+    // rather than pinning a churning value.
+    assert_eq!(
+        last_score,
+        MATE - 3,
+        "depth-6 must resolve to the exact mate"
+    );
+    let mv = best.unwrap().to_string();
+    assert!(
+        mv == "c6b6" || mv == "c6c7",
+        "expected an optimal KRK king move (c6b6 or c6c7), got {mv}"
+    );
 }
 
 #[test]
