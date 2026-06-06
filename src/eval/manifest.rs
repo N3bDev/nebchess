@@ -38,7 +38,23 @@ pub const TERMS: &[TermDef] = &[
         name: "PST_KING",
         len: 64,
     },
-    // T2 appends: PASSED(6) PASSED_CONNECTED(1) ISOLATED(1) DOUBLED(1)
+    // T2: pawn structure
+    TermDef {
+        name: "PASSED",
+        len: 6,
+    }, // by relative rank 2..7
+    TermDef {
+        name: "PASSED_CONNECTED",
+        len: 1,
+    },
+    TermDef {
+        name: "ISOLATED",
+        len: 1,
+    },
+    TermDef {
+        name: "DOUBLED",
+        len: 1,
+    },
     // T3 appends: MOB_KNIGHT(9) MOB_BISHOP(14) MOB_ROOK(15) MOB_QUEEN(28)
     // T4 appends: KS_ATTACKER(4) KS_SHIELD(3) KS_OPEN_FILE(1) KS_SEMI_FILE(1)
     // T5 appends: THREAT_BY_PAWN(4) THREAT_BY_MINOR(4) HANGING(1)
@@ -92,4 +108,9 @@ pub const PST_BISHOP: usize = offset_of("PST_BISHOP");
 pub const PST_ROOK: usize = offset_of("PST_ROOK");
 pub const PST_QUEEN: usize = offset_of("PST_QUEEN");
 pub const PST_KING: usize = offset_of("PST_KING");
+// T2 pawn structure offsets
+pub const PASSED: usize = offset_of("PASSED");
+pub const PASSED_CONNECTED: usize = offset_of("PASSED_CONNECTED");
+pub const ISOLATED: usize = offset_of("ISOLATED");
+pub const DOUBLED: usize = offset_of("DOUBLED");
 pub const TOTAL_PAIRS: usize = total_pairs();

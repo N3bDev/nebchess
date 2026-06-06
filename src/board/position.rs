@@ -33,6 +33,7 @@ pub(crate) struct Undo {
     pub ep: Option<Square>,
     pub halfmove: u16,
     pub key: u64,
+    pub pawn_key: u64,
 }
 
 #[derive(Clone)]
@@ -47,6 +48,7 @@ pub struct Position {
     pub(crate) halfmove: u16,
     pub(crate) fullmove: u16,
     pub(crate) key: u64,
+    pub(crate) pawn_key: u64,
     pub(crate) undo_stack: Vec<Undo>,
     pub(crate) key_history: Vec<u64>,
 }
@@ -64,6 +66,7 @@ impl Position {
             halfmove: 0,
             fullmove: 1,
             key: 0,
+            pawn_key: 0,
             undo_stack: Vec::with_capacity(256),
             key_history: Vec::with_capacity(256),
         }
@@ -81,6 +84,10 @@ impl Position {
     #[inline]
     pub fn key(&self) -> u64 {
         self.key
+    }
+    #[inline]
+    pub fn pawn_key(&self) -> u64 {
+        self.pawn_key
     }
     #[inline]
     pub fn castling(&self) -> CastlingRights {
@@ -148,11 +155,17 @@ impl Position {
     pub(crate) fn put_piece(&mut self, p: Piece, sq: Square) {
         self.put_raw(p, sq);
         self.key ^= KEYS.pieces[p.index()][sq.index()];
+        if p.piece_type() == PieceType::Pawn {
+            self.pawn_key ^= KEYS.pieces[p.index()][sq.index()];
+        }
     }
     #[inline]
     pub(crate) fn remove_piece(&mut self, sq: Square) -> Piece {
         let p = self.remove_raw(sq);
         self.key ^= KEYS.pieces[p.index()][sq.index()];
+        if p.piece_type() == PieceType::Pawn {
+            self.pawn_key ^= KEYS.pieces[p.index()][sq.index()];
+        }
         p
     }
     #[inline]
@@ -175,6 +188,18 @@ impl Position {
         }
         if self.stm == Color::Black {
             key ^= KEYS.black_to_move;
+        }
+        key
+    }
+
+    /// Pawn-only key recomputation (debug verification; never in hot paths).
+    pub fn compute_pawn_key(&self) -> u64 {
+        let mut key = 0u64;
+        for color in [Color::White, Color::Black] {
+            let p = Piece::new(color, PieceType::Pawn);
+            for sq in self.piece_bb(color, PieceType::Pawn) {
+                key ^= KEYS.pieces[p.index()][sq.index()];
+            }
         }
         key
     }
@@ -269,6 +294,7 @@ impl Position {
             pos.key ^= KEYS.black_to_move;
         }
         debug_assert_eq!(pos.key, pos.compute_key());
+        debug_assert_eq!(pos.pawn_key, pos.compute_pawn_key());
         Ok(pos)
     }
 
@@ -358,6 +384,7 @@ impl Position {
             ep: self.ep,
             halfmove: self.halfmove,
             key: self.key,
+            pawn_key: self.pawn_key,
         });
         self.key_history.push(self.key);
 
@@ -446,6 +473,7 @@ impl Position {
         self.key ^= KEYS.black_to_move;
 
         debug_assert_eq!(self.key, self.compute_key());
+        debug_assert_eq!(self.pawn_key, self.compute_pawn_key());
 
         // legality: mover's king must not be attacked
         if self.square_attacked(self.king_sq(stm), self.stm) {
@@ -511,6 +539,7 @@ impl Position {
         self.ep = u.ep;
         self.halfmove = u.halfmove;
         self.key = u.key;
+        self.pawn_key = u.pawn_key;
     }
 
     /// Has the current position occurred before within the reversible-move
@@ -546,6 +575,7 @@ impl Position {
             ep: self.ep,
             halfmove: self.halfmove,
             key: self.key,
+            pawn_key: self.pawn_key,
         });
         self.key_history.push(self.key);
         if let Some(ep) = self.ep.take() {
@@ -569,6 +599,7 @@ impl Position {
         self.ep = u.ep;
         self.halfmove = u.halfmove;
         self.key = u.key;
+        self.pawn_key = u.pawn_key;
     }
 
     /// Anything beyond king+pawns for `color` (zugzwang guard for null-move).
@@ -717,6 +748,7 @@ mod tests {
         // mixed flags over 6 plies; cumulative drift would survive single-move tests
         let mut pos = Position::startpos();
         let start_key = pos.key();
+        let start_pawn_key = pos.pawn_key();
         let moves = [
             ("g1", "f3", Move::QUIET),
             ("g8", "f6", Move::QUIET),
@@ -728,12 +760,44 @@ mod tests {
         for (f, t, flag) in moves {
             assert!(pos.make(mv(&pos, f, t, flag)));
             assert_eq!(pos.key(), pos.compute_key(), "drift after {f}{t}");
+            assert_eq!(
+                pos.pawn_key(),
+                pos.compute_pawn_key(),
+                "pawn key drift after {f}{t}"
+            );
         }
         for _ in 0..moves.len() {
             pos.unmake();
         }
         assert_eq!(pos.to_fen(), START_FEN);
         assert_eq!(pos.key(), start_key);
+        assert_eq!(pos.pawn_key(), start_pawn_key);
+    }
+
+    #[test]
+    fn pawn_key_changes_on_pawn_moves_not_knight() {
+        let mut pos = Position::startpos();
+        let pk_start = pos.pawn_key();
+        // knight move: pawn key unchanged
+        assert!(pos.make(mv(&pos, "g1", "f3", Move::QUIET)));
+        assert_eq!(pos.pawn_key(), pk_start, "knight move must not change pawn key");
+        pos.unmake();
+        // pawn move: pawn key must change
+        assert!(pos.make(mv(&pos, "e2", "e4", Move::DOUBLE_PUSH)));
+        assert_ne!(pos.pawn_key(), pk_start, "pawn double push must change pawn key");
+        assert_eq!(pos.pawn_key(), pos.compute_pawn_key());
+        pos.unmake();
+        assert_eq!(pos.pawn_key(), pk_start, "pawn key restored after unmake");
+    }
+
+    #[test]
+    fn pawn_key_survives_null_move() {
+        let mut pos = Position::startpos();
+        let pk = pos.pawn_key();
+        pos.make_null();
+        assert_eq!(pos.pawn_key(), pk, "null move must not change pawn key");
+        pos.unmake_null();
+        assert_eq!(pos.pawn_key(), pk);
     }
 
     #[test]
