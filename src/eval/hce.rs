@@ -3,7 +3,7 @@
 //! reads go through PARAMS[idx] + trace.record(idx, sign) IN THE SAME
 //! STATEMENT GROUP — that invariant is what keeps the tuner honest.
 
-use crate::board::{Bitboard, Color, Move, PieceType, Position};
+use crate::board::{attacks, Bitboard, Color, Move, PieceType, Position};
 use crate::eval::eval_params::PARAMS;
 use crate::eval::manifest as m;
 use crate::eval::trace::{NullTracer, Tracer};
@@ -164,6 +164,47 @@ fn pawn_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) 
     }
 }
 
+// ---- T3: mobility ----
+
+/// All squares attacked by `color`'s pawns (whole-set shift, no per-pawn loop).
+#[inline]
+fn pawn_attack_set(pos: &Position, color: Color) -> Bitboard {
+    let p = pos.piece_bb(color, PieceType::Pawn);
+    match color {
+        Color::White => p.north_east() | p.north_west(),
+        Color::Black => p.south_east() | p.south_west(),
+    }
+}
+
+/// Safe-mobility per piece: count attacked squares that are neither occupied by
+/// our own pieces nor attacked by an enemy pawn, indexing a per-piece table.
+/// A 0-mobility piece reads the most negative cell — that IS the trapped-piece
+/// term. Depends on ALL pieces (slider occupancy), so this is NOT pawn-cacheable:
+/// it runs in the fresh path of Hce::evaluate and in eval_terms (tuner path).
+fn mobility_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) {
+    let occ = pos.occ_all();
+    for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
+        // safe = not our own pieces, not attacked by an enemy pawn
+        let safe = !pos.occ(color) & !pawn_attack_set(pos, color.flip());
+        for sq in pos.piece_bb(color, PieceType::Knight) {
+            let n = (attacks::knight_attacks(sq) & safe).count() as usize;
+            add_term(m::MOB_KNIGHT + n, sign, t, mg, eg);
+        }
+        for sq in pos.piece_bb(color, PieceType::Bishop) {
+            let n = (attacks::bishop_attacks(sq, occ) & safe).count() as usize;
+            add_term(m::MOB_BISHOP + n, sign, t, mg, eg);
+        }
+        for sq in pos.piece_bb(color, PieceType::Rook) {
+            let n = (attacks::rook_attacks(sq, occ) & safe).count() as usize;
+            add_term(m::MOB_ROOK + n, sign, t, mg, eg);
+        }
+        for sq in pos.piece_bb(color, PieceType::Queen) {
+            let n = (attacks::queen_attacks(sq, occ) & safe).count() as usize;
+            add_term(m::MOB_QUEEN + n, sign, t, mg, eg);
+        }
+    }
+}
+
 /// White-relative (mg, eg) accumulation over all terms.
 /// This path is UNCACHED — used by the tuner (CollectingTracer) and as the
 /// reference for the transparency test. The engine's Hce::evaluate uses a
@@ -191,7 +232,9 @@ pub fn eval_terms<T: Tracer>(pos: &Position, t: &mut T) -> (i32, i32) {
     }
     // T2: pawn structure (uncached — tuner path)
     pawn_terms(pos, t, &mut mg, &mut eg);
-    // T3 mobility; T4 king safety; T5 threats append here
+    // T3: mobility (not pawn-cacheable — depends on all pieces)
+    mobility_terms(pos, t, &mut mg, &mut eg);
+    // T4 king safety; T5 threats append here
     (mg, eg)
 }
 
@@ -285,10 +328,14 @@ impl Evaluator for Hce {
 
     fn evaluate(&mut self, pos: &Position) -> i32 {
         let ph = phase(pos);
-        // Non-pawn terms computed fresh; pawn terms via hash
+        // Non-pawn material/PST computed fresh; pawn structure via hash.
         let (np_mg, np_eg) = eval_non_pawn_terms(pos);
         let (pw_mg, pw_eg) = pawn_terms_cached(&mut self.pawn_hash, pos);
-        let white = blend(np_mg + pw_mg, np_eg + pw_eg, ph);
+        // Mobility depends on all pieces -> NOT pawn-cacheable: compute fresh
+        // (NullTracer = zero cost) so the engine path matches eval_terms exactly.
+        let (mut mob_mg, mut mob_eg) = (0i32, 0i32);
+        mobility_terms(pos, &mut NullTracer, &mut mob_mg, &mut mob_eg);
+        let white = blend(np_mg + pw_mg + mob_mg, np_eg + pw_eg + mob_eg, ph);
         if pos.stm() == Color::White {
             white
         } else {
@@ -409,12 +456,14 @@ mod tests {
             // uncached traced path (what the tuner sees)
             let (mg_t, eg_t) = eval_terms(&pos, &mut crate::eval::trace::NullTracer);
             let uncached = blend(mg_t, eg_t, ph);
-            // cached path (cold)
+            // cached path (cold) — mirrors Hce::evaluate (np + pawn-hash + fresh mobility)
             let cached_cold = {
                 let white = {
                     let np = eval_non_pawn_terms(&pos);
                     let pw = pawn_terms_cached(&mut hce.pawn_hash, &pos);
-                    blend(np.0 + pw.0, np.1 + pw.1, ph)
+                    let (mut mob_mg, mut mob_eg) = (0i32, 0i32);
+                    mobility_terms(&pos, &mut NullTracer, &mut mob_mg, &mut mob_eg);
+                    blend(np.0 + pw.0 + mob_mg, np.1 + pw.1 + mob_eg, ph)
                 };
                 if pos.stm() == Color::White {
                     white
@@ -519,5 +568,57 @@ mod tests {
         let fen = "4k3/8/8/8/3p4/8/8/4K3 w - - 0 1";
         let signs = features_at(fen, manifest::PASSED + 3);
         assert_eq!(signs, vec![-1i8], "black passed pawn gets sign -1");
+    }
+
+    // ---- Step 3.4: mobility trace tests ----
+
+    /// Helper: collect (idx, sign) records whose idx falls in [base, base+len).
+    fn records_in_table(fen: &str, base: usize, len: usize) -> Vec<(usize, i8)> {
+        let pos = Position::from_fen(fen).unwrap();
+        let mut tr = CollectingTracer::default();
+        eval_terms(&pos, &mut tr);
+        tr.features
+            .iter()
+            .map(|&(i, s)| (i as usize, s))
+            .filter(|&(i, _)| i >= base && i < base + len)
+            .collect()
+    }
+
+    /// Startpos: each knight has exactly 2 safe squares. The b1/g1 knights reach
+    /// a3,c3 and f3,h3 respectively; none are attacked by an enemy pawn (enemy
+    /// pawns on rank 7 attack rank 6) and none are own-occupied. So every knight
+    /// records MOB_KNIGHT+2 — two white (+1) and two black (-1).
+    #[test]
+    fn startpos_knight_mobility_is_two() {
+        let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let recs = records_in_table(fen, manifest::MOB_KNIGHT, 9);
+        // All four knight records must be exactly at MOB_KNIGHT+2.
+        assert_eq!(recs.len(), 4, "four knights total, got {recs:?}");
+        for &(idx, _) in &recs {
+            assert_eq!(
+                idx,
+                manifest::MOB_KNIGHT + 2,
+                "every startpos knight has 2 safe squares; got idx {idx}"
+            );
+        }
+        let white = recs.iter().filter(|&&(_, s)| s == 1).count();
+        let black = recs.iter().filter(|&&(_, s)| s == -1).count();
+        assert_eq!((white, black), (2, 2), "two white +1, two black -1");
+    }
+
+    /// A corner-trapped bishop with exactly 0 safe squares records MOB_BISHOP+0.
+    /// White bishop a1, white pawn b2: the bishop's only attacked square is b2
+    /// (own-occupied -> not safe), the ray is blocked there, so safe count = 0.
+    /// FEN legality: white Ka1?? no — kings apart. Use white Kc1, black Kc8.
+    #[test]
+    fn trapped_bishop_records_zero_mobility() {
+        // White: Ba1, Pb2, Kc1.  Black: Kc8.  White to move (irrelevant to eval).
+        let fen = "2k5/8/8/8/8/8/1P6/B1K5 w - - 0 1";
+        let recs = records_in_table(fen, manifest::MOB_BISHOP, 14);
+        assert_eq!(
+            recs,
+            vec![(manifest::MOB_BISHOP, 1i8)],
+            "trapped a1 bishop (pawn b2) has 0 safe squares -> exactly one MOB_BISHOP+0, sign +1"
+        );
     }
 }

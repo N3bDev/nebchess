@@ -55,10 +55,26 @@ pub const TERMS: &[TermDef] = &[
         name: "DOUBLED",
         len: 1,
     },
-    // T3 appends: MOB_KNIGHT(9) MOB_BISHOP(14) MOB_ROOK(15) MOB_QUEEN(28)
-    // T4 appends: KS_ATTACKER(4) KS_SHIELD(3) KS_OPEN_FILE(1) KS_SEMI_FILE(1)
-    // T5 appends: THREAT_BY_PAWN(4) THREAT_BY_MINOR(4) HANGING(1)
-    //             BISHOP_PAIR(1) ROOK_OPEN(1) ROOK_SEMI(1) TEMPO(1)
+    // T3: mobility (safe-square counts per piece; 0..max inclusive)
+    TermDef {
+        name: "MOB_KNIGHT",
+        len: 9,
+    }, // 0..=8 safe squares
+    TermDef {
+        name: "MOB_BISHOP",
+        len: 14,
+    }, // 0..=13 safe squares
+    TermDef {
+        name: "MOB_ROOK",
+        len: 15,
+    }, // 0..=14 safe squares
+    TermDef {
+        name: "MOB_QUEEN",
+        len: 28,
+    }, // 0..=27 safe squares
+       // T4 appends: KS_ATTACKER(4) KS_SHIELD(3) KS_OPEN_FILE(1) KS_SEMI_FILE(1)
+       // T5 appends: THREAT_BY_PAWN(4) THREAT_BY_MINOR(4) HANGING(1)
+       //             BISHOP_PAIR(1) ROOK_OPEN(1) ROOK_SEMI(1) TEMPO(1)
 ];
 
 const fn str_eq(a: &str, b: &str) -> bool {
@@ -113,4 +129,9 @@ pub const PASSED: usize = offset_of("PASSED");
 pub const PASSED_CONNECTED: usize = offset_of("PASSED_CONNECTED");
 pub const ISOLATED: usize = offset_of("ISOLATED");
 pub const DOUBLED: usize = offset_of("DOUBLED");
+// T3 mobility offsets
+pub const MOB_KNIGHT: usize = offset_of("MOB_KNIGHT");
+pub const MOB_BISHOP: usize = offset_of("MOB_BISHOP");
+pub const MOB_ROOK: usize = offset_of("MOB_ROOK");
+pub const MOB_QUEEN: usize = offset_of("MOB_QUEEN");
 pub const TOTAL_PAIRS: usize = total_pairs();
