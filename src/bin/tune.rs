@@ -1,5 +1,8 @@
 //! Texel tuner v2: manifest-driven, trace-fed, phase-weighted.
-//!   cargo run --release --bin tune -- tools/data/quiet-labeled.epd > src/eval/eval_params.rs
+//!   cargo build --release && ./target/release/tune tools/data/quiet-labeled.epd \
+//!     > /tmp/eval_params_new.rs && cp /tmp/eval_params_new.rs src/eval/eval_params.rs
+//! NEVER `cargo run ... > src/eval/eval_params.rs`: the shell truncates the params
+//! file before cargo compiles the library that includes it (build fails, params lost).
 //! Optional args: [epochs=400] [lr=0.05] [limit=0(all)]
 //!
 //! Param vector: [mg_bank | eg_bank], each TOTAL_PAIRS long. A traced
