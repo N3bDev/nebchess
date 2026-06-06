@@ -22,5 +22,6 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-06 | **Pawn structure + pawn hash, K frozen** (M5 T2) | tapered | [0,10] | 470 | 197-110-163 | **H1: +65.1 ±24.9** (0 timeouts; canary 261 = −6 accepted trade after K-degeneracy incident — see tactics-log) | 102691 |
 | 2026-06-06 | **Safe mobility (4 tables)** (M5 T3) | pawns | [0,10] | 406 | 168-83-155 | **H1: +73.8 ±26.7** (0 timeouts; canary 262 = +1; trapped-piece signal lands) | 107109 |
 | 2026-06-06 | **King safety (zone/shield/files)** (M5 T4) | mobility | [0,10] | 4396 | 1374-1249-1773 | **H1: +9.9 ±7.7** (0 timeouts; smallest effect yet — knowledge ≈ −13% NPS tax, canary churn 257; shared attack-map refactor mandated before T5, see plan step 5.0 decision tree) | 99185 |
+| 2026-06-06 | *(infrastructure)* shared attack-map pass @ 9b6adfa | kingsafety | — | — | — | bench-identical refactor (99185, node-identical d13); NPS +21-23%; baseline refreshed to fused build — **not credited as elo**, T5 gate isolates knowledge | 99185 |
 
 **M3 cumulative: +384.4 measured self-play elo over M2. M4 cumulative: +553.2 over M3** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only). Informational anchors: M3 closed 8-2 vs SF@1800; M4 closed 10-0 vs SF@2000.
