@@ -40,7 +40,7 @@ const fn build_forward_file() -> [[u64; 64]; 2] {
         let file = sq % 8;
         let rank = sq / 8;
         let col = FILE_A << file; // all 8 squares of this file
-        // White forward: ranks strictly above (rank+1 .. 7)
+                                  // White forward: ranks strictly above (rank+1 .. 7)
         let above_mask: u64 = if rank < 7 {
             u64::MAX << ((rank + 1) * 8)
         } else {
@@ -70,7 +70,7 @@ const fn build_passed_mask() -> [[u64; 64]; 2] {
         let rank = sq / 8;
         let col = FILE_A << file;
         let span = col | adj[file]; // own file + adjacent files
-        // White: strictly above rank
+                                    // White: strictly above rank
         let above_mask: u64 = if rank < 7 {
             u64::MAX << ((rank + 1) * 8)
         } else {
@@ -397,8 +397,8 @@ mod tests {
     fn pawn_hash_transparent_to_uncached() {
         let fens = [
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1",   // lone passed pawn
-            "4k3/p7/8/P7/8/8/8/4K3 w - - 0 1",   // both sides, white passed
+            "4k3/8/8/3P4/8/8/8/4K3 w - - 0 1", // lone passed pawn
+            "4k3/p7/8/P7/8/8/8/4K3 w - - 0 1", // both sides, white passed
             "r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3",
             "8/2p2pp1/3k4/p7/P1P5/8/5PPP/4K3 w - - 0 1", // complex pawn structure
         ];
@@ -416,10 +416,18 @@ mod tests {
                     let pw = pawn_terms_cached(&mut hce.pawn_hash, &pos);
                     blend(np.0 + pw.0, np.1 + pw.1, ph)
                 };
-                if pos.stm() == Color::White { white } else { -white }
+                if pos.stm() == Color::White {
+                    white
+                } else {
+                    -white
+                }
             };
             // stm-relative comparison
-            let uncached_stm = if pos.stm() == Color::White { uncached } else { -uncached };
+            let uncached_stm = if pos.stm() == Color::White {
+                uncached
+            } else {
+                -uncached
+            };
             assert_eq!(
                 cached_cold, uncached_stm,
                 "pawn hash cold miss mismatch on FEN: {fen}"
@@ -455,7 +463,11 @@ mod tests {
         // d5 = rank 4 (0-indexed), white rel_rank = 4, PASSED index = PASSED + 4 - 1 = PASSED + 3
         let expected_idx = manifest::PASSED + 3;
         let signs = features_at(fen, expected_idx);
-        assert_eq!(signs, vec![1i8], "d5 pawn: exactly one PASSED+3 record with sign +1");
+        assert_eq!(
+            signs,
+            vec![1i8],
+            "d5 pawn: exactly one PASSED+3 record with sign +1"
+        );
         // No lower-rank PASSED records
         for r in 0..3usize {
             let s = features_at(fen, manifest::PASSED + r);
@@ -471,7 +483,10 @@ mod tests {
         let signs = features_at(fen, manifest::ISOLATED);
         assert_eq!(signs, vec![1i8], "lone e2 pawn is isolated");
         // No DOUBLED
-        assert!(features_at(fen, manifest::DOUBLED).is_empty(), "no doubled pawn");
+        assert!(
+            features_at(fen, manifest::DOUBLED).is_empty(),
+            "no doubled pawn"
+        );
     }
 
     /// Doubled pawn test: white pawns on e2 and e4.

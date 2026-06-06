@@ -83,49 +83,18 @@ fn emit(p: &[f64], k: f64, train_mse: f64, val_mse: f64) {
     println!();
     println!("pub static PARAMS: [(i32, i32); crate::eval::manifest::TOTAL_PAIRS] = [");
 
+    // One pair per line, exactly as rustfmt formats it — keeps the generated
+    // file `cargo fmt --check`-clean across retunes.
     let r = |v: f64| v.round() as i32;
     let mut off = 0usize;
     for term in TERMS {
         match term.name {
-            "MATERIAL" => {
-                print!("    // MATERIAL: P N B R Q K\n    ");
-                for i in 0..term.len {
-                    let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
-                    if i < term.len - 1 {
-                        print!("({mg}, {eg}), ");
-                    } else {
-                        println!("({mg}, {eg}),");
-                    }
-                }
-            }
-            name if name.starts_with("PST_") => {
-                let piece = &name[4..]; // e.g. "PAWN"
-                println!("    // PST_{piece} (64 pairs, 8 per line)");
-                for row in 0..8 {
-                    print!("    ");
-                    for col in 0..8 {
-                        let i = row * 8 + col;
-                        let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
-                        if col < 7 {
-                            print!("({mg:>4},{eg:>4}), ");
-                        } else {
-                            println!("({mg:>4},{eg:>4}),");
-                        }
-                    }
-                }
-            }
-            name => {
-                println!("    // {name} ({} pairs)", term.len);
-                print!("    ");
-                for i in 0..term.len {
-                    let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
-                    print!("({mg}, {eg})");
-                    if i < term.len - 1 {
-                        print!(", ");
-                    }
-                }
-                println!(",");
-            }
+            "MATERIAL" => println!("    // MATERIAL: P N B R Q K"),
+            name => println!("    // {name} ({} pairs)", term.len),
+        }
+        for i in 0..term.len {
+            let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
+            println!("    ({mg}, {eg}),");
         }
         off += term.len;
     }

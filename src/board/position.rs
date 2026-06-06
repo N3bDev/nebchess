@@ -780,11 +780,19 @@ mod tests {
         let pk_start = pos.pawn_key();
         // knight move: pawn key unchanged
         assert!(pos.make(mv(&pos, "g1", "f3", Move::QUIET)));
-        assert_eq!(pos.pawn_key(), pk_start, "knight move must not change pawn key");
+        assert_eq!(
+            pos.pawn_key(),
+            pk_start,
+            "knight move must not change pawn key"
+        );
         pos.unmake();
         // pawn move: pawn key must change
         assert!(pos.make(mv(&pos, "e2", "e4", Move::DOUBLE_PUSH)));
-        assert_ne!(pos.pawn_key(), pk_start, "pawn double push must change pawn key");
+        assert_ne!(
+            pos.pawn_key(),
+            pk_start,
+            "pawn double push must change pawn key"
+        );
         assert_eq!(pos.pawn_key(), pos.compute_pawn_key());
         pos.unmake();
         assert_eq!(pos.pawn_key(), pk_start, "pawn key restored after unmake");
