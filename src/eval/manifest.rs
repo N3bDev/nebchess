@@ -72,7 +72,23 @@ pub const TERMS: &[TermDef] = &[
         name: "MOB_QUEEN",
         len: 28,
     }, // 0..=27 safe squares
-       // T4 appends: KS_ATTACKER(4) KS_SHIELD(3) KS_OPEN_FILE(1) KS_SEMI_FILE(1)
+    // T4: king safety
+    TermDef {
+        name: "KS_ATTACKER",
+        len: 4,
+    }, // N/B/R/Q touching the king zone
+    TermDef {
+        name: "KS_SHIELD",
+        len: 3,
+    }, // shield pawn at rel-rank 2 / rel-rank 3 / missing, per file
+    TermDef {
+        name: "KS_OPEN_FILE",
+        len: 1,
+    }, // no pawns on a file near the king
+    TermDef {
+        name: "KS_SEMI_FILE",
+        len: 1,
+    }, // no own pawns on a file near the king
        // T5 appends: THREAT_BY_PAWN(4) THREAT_BY_MINOR(4) HANGING(1)
        //             BISHOP_PAIR(1) ROOK_OPEN(1) ROOK_SEMI(1) TEMPO(1)
 ];
@@ -134,4 +150,9 @@ pub const MOB_KNIGHT: usize = offset_of("MOB_KNIGHT");
 pub const MOB_BISHOP: usize = offset_of("MOB_BISHOP");
 pub const MOB_ROOK: usize = offset_of("MOB_ROOK");
 pub const MOB_QUEEN: usize = offset_of("MOB_QUEEN");
+// T4 king safety offsets
+pub const KS_ATTACKER: usize = offset_of("KS_ATTACKER");
+pub const KS_SHIELD: usize = offset_of("KS_SHIELD");
+pub const KS_OPEN_FILE: usize = offset_of("KS_OPEN_FILE");
+pub const KS_SEMI_FILE: usize = offset_of("KS_SEMI_FILE");
 pub const TOTAL_PAIRS: usize = total_pairs();

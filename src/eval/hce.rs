@@ -205,6 +205,100 @@ fn mobility_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i
     }
 }
 
+// ---- T4: king safety ----
+
+/// All 8 squares of file `f` as a bitboard.
+#[inline]
+fn file_mask(f: u8) -> Bitboard {
+    Bitboard(FILE_A << f)
+}
+
+/// The single rank `ahead` steps in front of `ksq`, color-relative, as a
+/// full-rank bitboard. White advances toward higher ranks, Black toward lower.
+/// Returns an empty bitboard when the target rank is off the board (so a king
+/// already on the back two ranks simply has no shield there).
+#[inline]
+fn shield_rank(color: Color, ksq: crate::board::Square, ahead: i8) -> Bitboard {
+    let kr = ksq.rank() as i8;
+    let r = match color {
+        Color::White => kr + ahead,
+        Color::Black => kr - ahead,
+    };
+    if (0..8).contains(&r) {
+        Bitboard(0xFFu64 << (r * 8))
+    } else {
+        Bitboard::EMPTY
+    }
+}
+
+/// King safety: enemy pieces touching the king zone (by type), pawn shield
+/// state on the king's file and its neighbors, and open/semi-open files near
+/// the king. Depends on ALL pieces (slider occupancy, both armies) -> NOT
+/// pawn-cacheable: like mobility, it runs fresh in Hce::evaluate AND in the
+/// tuner path (eval_terms).
+///
+/// SIGN CONVENTION: every feature is recorded in the white-relative frame with
+/// `sign = +1` when the WHITE king is the subject and `-1` when the black king
+/// is. The tuner learns whether each parameter is good or bad for the king's
+/// owner; penalties therefore come out NEGATIVE on their own (a white-king
+/// danger feature, recorded +1, gets a negative tuned weight). Shield bonuses
+/// stay positive. The shield-file loop spans `kfile-1..=kfile+1` clamped to
+/// [0,7], so a king on the a/h file is scored over 2 files, not 3 — intended,
+/// matching standard HCE practice.
+fn king_safety_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) {
+    let occ = pos.occ_all();
+    for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
+        let ksq = pos.king_sq(color);
+        let zone = attacks::king_attacks(ksq) | ksq.bb();
+        let enemy = color.flip();
+        // Enemy attackers touching the king zone, counted per piece type.
+        for (pt, slot) in [
+            (PieceType::Knight, 0usize),
+            (PieceType::Bishop, 1),
+            (PieceType::Rook, 2),
+            (PieceType::Queen, 3),
+        ] {
+            for sq in pos.piece_bb(enemy, pt) {
+                let att = match pt {
+                    PieceType::Knight => attacks::knight_attacks(sq),
+                    PieceType::Bishop => attacks::bishop_attacks(sq, occ),
+                    PieceType::Rook => attacks::rook_attacks(sq, occ),
+                    _ => attacks::queen_attacks(sq, occ),
+                };
+                if (att & zone).any() {
+                    add_term(m::KS_ATTACKER + slot, sign, t, mg, eg);
+                }
+            }
+        }
+        // Pawn shield + file state on the king's file and its neighbors.
+        let own_pawns = pos.piece_bb(color, PieceType::Pawn);
+        let all_pawns = own_pawns | pos.piece_bb(enemy, PieceType::Pawn);
+        let kfile = ksq.file() as i8;
+        // Shield = our own pawns on the two ranks directly ahead of the king,
+        // checked per-rank (no shield_span union — the per-rank intersection
+        // is equivalent and clearer; reported as the implementer's choice).
+        let r1 = shield_rank(color, ksq, 1);
+        let r2 = shield_rank(color, ksq, 2);
+        for f in (kfile - 1).max(0)..=(kfile + 1).min(7) {
+            let file_bb = file_mask(f as u8);
+            // Shield state, nearest rank first (one rank ahead, then two).
+            if (own_pawns & file_bb & r1).any() {
+                add_term(m::KS_SHIELD, sign, t, mg, eg); // pawn one rank ahead
+            } else if (own_pawns & file_bb & r2).any() {
+                add_term(m::KS_SHIELD + 1, sign, t, mg, eg); // pawn two ranks ahead
+            } else {
+                add_term(m::KS_SHIELD + 2, sign, t, mg, eg); // shield missing
+            }
+            // Open / semi-open file near the king.
+            if (all_pawns & file_bb).is_empty() {
+                add_term(m::KS_OPEN_FILE, sign, t, mg, eg);
+            } else if (own_pawns & file_bb).is_empty() {
+                add_term(m::KS_SEMI_FILE, sign, t, mg, eg);
+            }
+        }
+    }
+}
+
 /// White-relative (mg, eg) accumulation over all terms.
 /// This path is UNCACHED — used by the tuner (CollectingTracer) and as the
 /// reference for the transparency test. The engine's Hce::evaluate uses a
@@ -234,7 +328,9 @@ pub fn eval_terms<T: Tracer>(pos: &Position, t: &mut T) -> (i32, i32) {
     pawn_terms(pos, t, &mut mg, &mut eg);
     // T3: mobility (not pawn-cacheable — depends on all pieces)
     mobility_terms(pos, t, &mut mg, &mut eg);
-    // T4 king safety; T5 threats append here
+    // T4: king safety (not pawn-cacheable — depends on all pieces)
+    king_safety_terms(pos, t, &mut mg, &mut eg);
+    // T5 threats append here
     (mg, eg)
 }
 
@@ -331,11 +427,13 @@ impl Evaluator for Hce {
         // Non-pawn material/PST computed fresh; pawn structure via hash.
         let (np_mg, np_eg) = eval_non_pawn_terms(pos);
         let (pw_mg, pw_eg) = pawn_terms_cached(&mut self.pawn_hash, pos);
-        // Mobility depends on all pieces -> NOT pawn-cacheable: compute fresh
-        // (NullTracer = zero cost) so the engine path matches eval_terms exactly.
-        let (mut mob_mg, mut mob_eg) = (0i32, 0i32);
-        mobility_terms(pos, &mut NullTracer, &mut mob_mg, &mut mob_eg);
-        let white = blend(np_mg + pw_mg + mob_mg, np_eg + pw_eg + mob_eg, ph);
+        // Mobility and king safety depend on all pieces -> NOT pawn-cacheable:
+        // compute fresh (NullTracer = zero cost) so the engine path matches
+        // eval_terms exactly.
+        let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
+        mobility_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+        king_safety_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+        let white = blend(np_mg + pw_mg + fresh_mg, np_eg + pw_eg + fresh_eg, ph);
         if pos.stm() == Color::White {
             white
         } else {
@@ -456,14 +554,16 @@ mod tests {
             // uncached traced path (what the tuner sees)
             let (mg_t, eg_t) = eval_terms(&pos, &mut crate::eval::trace::NullTracer);
             let uncached = blend(mg_t, eg_t, ph);
-            // cached path (cold) — mirrors Hce::evaluate (np + pawn-hash + fresh mobility)
+            // cached path (cold) — mirrors Hce::evaluate
+            // (np + pawn-hash + fresh mobility + fresh king safety)
             let cached_cold = {
                 let white = {
                     let np = eval_non_pawn_terms(&pos);
                     let pw = pawn_terms_cached(&mut hce.pawn_hash, &pos);
-                    let (mut mob_mg, mut mob_eg) = (0i32, 0i32);
-                    mobility_terms(&pos, &mut NullTracer, &mut mob_mg, &mut mob_eg);
-                    blend(np.0 + pw.0 + mob_mg, np.1 + pw.1 + mob_eg, ph)
+                    let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
+                    mobility_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+                    king_safety_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+                    blend(np.0 + pw.0 + fresh_mg, np.1 + pw.1 + fresh_eg, ph)
                 };
                 if pos.stm() == Color::White {
                     white
@@ -619,6 +719,115 @@ mod tests {
             recs,
             vec![(manifest::MOB_BISHOP, 1i8)],
             "trapped a1 bishop (pawn b2) has 0 safe squares -> exactly one MOB_BISHOP+0, sign +1"
+        );
+    }
+
+    // ---- Step 4.3: king-safety trace tests ----
+
+    /// Collect (idx, sign) records in [base, base+len) restricted to one sign
+    /// (used to isolate the WHITE king's features from the BLACK king's, since
+    /// neighboring shield-file loops can overlap on a shared file).
+    fn ks_records(fen: &str, base: usize, len: usize, want_sign: i8) -> Vec<usize> {
+        let pos = Position::from_fen(fen).unwrap();
+        let mut tr = CollectingTracer::default();
+        eval_terms(&pos, &mut tr);
+        tr.features
+            .iter()
+            .filter(|&&(i, s)| (i as usize) >= base && (i as usize) < base + len && s == want_sign)
+            .map(|&(i, _)| i as usize)
+            .collect()
+    }
+
+    /// Castled white king with an intact pawn shield: Kg1 with pawns f2/g2/h2.
+    /// White's shield loop spans files f,g,h; each has an own pawn one rank
+    /// ahead (rank 2) -> three KS_SHIELD+0 records (sign +1), and none of those
+    /// files is open or semi-open for white. Black king is parked on a8 with an
+    /// a7 pawn so its own shield/file records land on the a/b files (sign -1),
+    /// well clear of white's f/g/h files.
+    #[test]
+    fn castled_king_full_shield() {
+        // White: Kg1, Pf2,Pg2,Ph2.  Black: Ka8, Pa7.  Legal, no side-effect check.
+        let fen = "k7/p7/8/8/8/8/5PPP/6K1 w - - 0 1";
+        // Validate legality before asserting.
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::White), crate::board::Square::G1);
+
+        // Exactly three KS_SHIELD+0 (sign +1) for white; none at +1 or +2.
+        let shield0 = ks_records(fen, manifest::KS_SHIELD, 1, 1);
+        assert_eq!(
+            shield0.len(),
+            3,
+            "Kg1 with f2/g2/h2: three shield-pawn-one-rank-ahead records, got {shield0:?}"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD + 1, 1, 1).is_empty(),
+            "no rel-rank-3 shield records for white"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD + 2, 1, 1).is_empty(),
+            "no missing-shield records for white"
+        );
+        // No open/semi files among white's f/g/h (all carry a white pawn).
+        assert!(
+            ks_records(fen, manifest::KS_OPEN_FILE, 1, 1).is_empty(),
+            "no open file near the white king"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SEMI_FILE, 1, 1).is_empty(),
+            "no semi-open file near the white king"
+        );
+    }
+
+    /// Stripped white king: Kg1 with NO f/g/h pawns, and an enemy queen+rook
+    /// bearing on the king zone. White's shield loop (files f,g,h) finds no own
+    /// pawn anywhere ahead -> three KS_SHIELD+2 (missing) records (sign +1).
+    /// All three files are pawnless -> three KS_OPEN_FILE records. The black
+    /// queen (h4: hits h1/h2/f2 in the zone) and rook (f8: hits f1 down the
+    /// open f-file) both touch the king zone -> KS_ATTACKER records (slots Q
+    /// and R). Neither piece checks the g1 king (no line to g1), so the FEN is
+    /// a legal white-to-move position with no side-effect check.
+    #[test]
+    fn stripped_king_open_files_and_attackers() {
+        // White: Kg1.  Black: Ka8, Qh4, Rf8.  White to move, not in check.
+        let fen = "k4r2/8/8/8/7q/8/8/6K1 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::White), crate::board::Square::G1);
+
+        // Three missing-shield records (sign +1) on f/g/h; none nearer.
+        let missing = ks_records(fen, manifest::KS_SHIELD + 2, 1, 1);
+        assert_eq!(
+            missing.len(),
+            3,
+            "Kg1 with no f/g/h pawns: three missing-shield records, got {missing:?}"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD, 1, 1).is_empty(),
+            "no one-rank-ahead shield for the stripped king"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD + 1, 1, 1).is_empty(),
+            "no two-ranks-ahead shield for the stripped king"
+        );
+        // Three open files (f/g/h have no pawns of either color).
+        let open = ks_records(fen, manifest::KS_OPEN_FILE, 1, 1);
+        assert_eq!(
+            open.len(),
+            3,
+            "all three files near the stripped king are open, got {open:?}"
+        );
+        // King-zone attackers present: the black queen and rook both bear on g1.
+        let attackers = ks_records(fen, manifest::KS_ATTACKER, 4, 1);
+        assert!(
+            !attackers.is_empty(),
+            "enemy queen+rook on the g-file must touch the king zone"
+        );
+        assert!(
+            attackers.contains(&(manifest::KS_ATTACKER + 3)),
+            "the black queen (slot 3) attacks the zone, got {attackers:?}"
+        );
+        assert!(
+            attackers.contains(&(manifest::KS_ATTACKER + 2)),
+            "the black rook (slot 2) attacks the zone, got {attackers:?}"
         );
     }
 }
