@@ -8,13 +8,14 @@
 
 NebChess is a from-scratch UCI chess engine written in Rust.
 
-**Target: 2400 CCRL Blitz** (stretch goal: 2500) with a hand-crafted evaluation (HCE).
-The list is named deliberately: CCRL Blitz runs ~100-150 Elo higher than CCRL 40/15 for
-the same engine, so "2400" without a list is meaningless. Calibration points from real
-engine progressions: Rustic Alpha 1 (equivalent to our M2 feature set) measured 1675
-CCRL; Leorik reached 2112-2566 across HCE versions. 2400 HCE is ambitious-but-reachable
-with deep tuning. A phase-2 NNUE evaluation (out of scope for v1.0, designed-for in the
-architecture) would push toward 2700+.
+**Target (re-aimed 2026-06-06): 2600 CCRL-Blitz-anchored** (stretch: 2700, the
+practical HCE ceiling) with a hand-crafted evaluation. ORIGINAL target was 2400
+(stretch 2500); v0.4.0 measured **2414 ± 22** on the anchored ladder (see
+docs/strength-log.md, incl. the 10+0.1-vs-2'+1" TC caveat) and ~2300 as a live
+Lichess bot, so the goal moved up with user approval. Calibration: Leorik 2.x
+(the closest feature-set comparable) spans 2537-2677; Stash v21 sits ~2714.
+A phase-2 NNUE evaluation (out of scope for v1.0, designed-for in the
+architecture) remains the path beyond ~2700.
 
 ### Decisions locked with the user
 
