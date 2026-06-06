@@ -16,5 +16,6 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | LMR (depth>=3, killers exempt) | nullmove | [0,10] | 934 | 301-217-416 | **H1: +31.3 ±16.1** (1 timeout, old side) | 212534 |
 | 2026-06-05 | Aspiration windows | lmr | [0,10] | 402 | 149-66-187 | **H1: +72.8 ±25.0** (0 timeouts; LMR synergy) | 212534 |
 | 2026-06-05 | RFP + futility (d<=2 after canary fix) | aspiration | [0,10] | 300 | 122-36-142 | **H1: +102.5 ±28.4** (tactics canary: 266/299 ✓ — see tactics-log incident) | 97369 |
+| 2026-06-05 | Quiescence TT | futility | [0,5] | 1488 | 421-274-793 | **H1: +34.4 ±11.8** (canary 266 ✓) | 85636 |
 
 **M3 cumulative: +384.4 measured self-play elo over M2** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only).
