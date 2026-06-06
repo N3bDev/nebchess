@@ -2,6 +2,7 @@
 /tools/bin/
 /tools/books/
 /tools/suites/
+/tools/data/
 *.bin
 __pycache__/
 .claude/
