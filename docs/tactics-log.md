@@ -13,3 +13,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-05 | futility d<=2 + RFP @ c41d9c6 | 266/299 | fix verified — kept ~97% of node savings (bench 96150→97369); deeper futility returns with gives_check/SEE margins (M6) |
 | 2026-06-05 | qsearch TT @ 8554de1 | 266/299 | clean — cache, not a prune |
 | 2026-06-05 | Texel-tuned PST+material @ 78d2fc6 | 258/299 | −8 (below the 10 floor): tuned Q=1049 likely dims sacrifice appetite; SPRT is the arbiter — if H0, tables revert per gate semantics |
+| 2026-06-06 | Tapered mg/eg + retune @ 1d0bdfe | 267/299 | **+9 — recovers the flat-tune dip** (queen mg/eg split frees middlegame sacrifice judgment); project high |
