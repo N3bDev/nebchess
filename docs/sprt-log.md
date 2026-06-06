@@ -19,4 +19,4 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | Quiescence TT | futility | [0,5] | 1488 | 421-274-793 | **H1: +34.4 ±11.8** (canary 266 ✓) | 85636 |
 | 2026-06-05 | **Texel-tuned PST+material** (first learned eval) | qsearch-tt | [0,5] | 416 | 286-59-71 | **H1: +212.7 ±35.4** — largest gain in project history; WAC −8 accepted as the documented trade | 138119 |
 
-**M3 cumulative: +384.4 measured self-play elo over M2** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only).
+**M3 cumulative: +384.4 measured self-play elo over M2. M4 cumulative: +553.2 over M3** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only). Informational anchors: M3 closed 8-2 vs SF@1800; M4 closed 10-0 vs SF@2000.

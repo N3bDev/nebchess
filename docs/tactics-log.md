@@ -1,6 +1,7 @@
 # Tactics Log
 
-WAC (300 positions) at 1000ms/position, single thread, default Hash.
+WAC (300 positions; 299 scored — WAC.274 has a malformed EPD line) at
+1000ms/position, single thread, default Hash.
 Informational regression canary — self-play SPRT shares blind spots
 between both engines; this metric does not. A drop >= 10 positions vs
 the previous entry is a stop-and-investigate signal.
