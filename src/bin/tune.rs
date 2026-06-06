@@ -1,4 +1,4 @@
-//! Texel tuner v2: manifest-driven, trace-fed, phase-weighted.
+//! Texel tuner v2: manifest-driven, trace-fed, phase-weighted, parallel (M5 T6).
 //!   cargo build --release && ./target/release/tune tools/data/quiet-labeled.epd \
 //!     > /tmp/eval_params_new.rs && cp /tmp/eval_params_new.rs src/eval/eval_params.rs
 //! NEVER `cargo run ... > src/eval/eval_params.rs`: the shell truncates the params
@@ -8,13 +8,61 @@
 //! Param vector: [mg_bank | eg_bank], each TOTAL_PAIRS long. A traced
 //! feature (idx, sign) at a position with phase ph contributes:
 //!   d(eval)/d(mg[idx]) = sign * ph/24,  d(eval)/d(eg[idx]) = sign * (24-ph)/24.
+//!
+//! Parallelism & determinism (std::thread::scope, no external crates):
+//! The per-sample gradient and MSE loops — the dominant cost — are parallel;
+//! the Adam update stays serial (O(params), trivial). Determinism is REQUIRED:
+//! the output must be byte-identical regardless of core count. Floating-point
+//! addition is non-associative, so the reduction order must be FIXED. We do that
+//! by partitioning `train` into a CONSTANT `NUM_CHUNKS` (16) contiguous chunks
+//! — a count independent of the machine — having a pool of worker threads claim
+//! chunks via an atomic cursor and return their `(chunk_idx, partial)` results,
+//! then placing each partial by its chunk index and reducing `[0..NUM_CHUNKS]` in
+//! chunk-index order on the main thread. Within a chunk the sample order is fixed
+//! (contiguous slice), and the cross-chunk reduce order is fixed (0,1,2,...), so
+//! the total sum is identical for any thread count or scheduling. Verified: two
+//! reruns with `<data> 20 0.05 50000` produce byte-identical eval_params output.
 
 use nebchess::board::Position;
 use nebchess::eval::hce::{eval_terms, phase};
 use nebchess::eval::manifest::{TERMS, TOTAL_PAIRS};
 use nebchess::eval::trace::CollectingTracer;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const N: usize = TOTAL_PAIRS;
+
+/// Fixed partition count for the parallel gradient/MSE reductions. CONSTANT and
+/// independent of the core count — that is what makes the float reduction order
+/// (and therefore the tuner's output) deterministic across machines. Do NOT tie
+/// this to `available_parallelism()`.
+const NUM_CHUNKS: usize = 16;
+
+/// Contiguous chunk boundaries that partition `0..len` into `NUM_CHUNKS` pieces
+/// (the last chunks absorb the remainder). Order is fixed → reduction is fixed.
+fn chunk_bounds(len: usize) -> Vec<(usize, usize)> {
+    let base = len / NUM_CHUNKS;
+    let rem = len % NUM_CHUNKS;
+    let mut bounds = Vec::with_capacity(NUM_CHUNKS);
+    let mut start = 0;
+    for c in 0..NUM_CHUNKS {
+        // Spread the remainder over the first `rem` chunks for balance; the
+        // exact split is irrelevant to determinism — only its fixedness is.
+        let this = base + usize::from(c < rem);
+        bounds.push((start, start + this));
+        start += this;
+    }
+    bounds
+}
+
+/// Worker-thread count: take it from the machine but cap at 14 (leave headroom on
+/// the 16-core box). Thread count affects ONLY speed, never the result — the
+/// reduction is over `NUM_CHUNKS` fixed chunks in fixed order regardless.
+fn num_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 14)
+}
 
 /// Sigmoid scale, fitted once at the tapered foundation (M5 T1) and frozen.
 /// See the comment at its use site before changing this.
@@ -36,6 +84,39 @@ fn extract(pos: &Position, result: f64) -> Sample {
     }
 }
 
+/// Parse one dataset line into (FEN, white-relative result), sniffing the format
+/// per line so a single tuner handles both corpora:
+///   - zurichess quiet-labeled: `<placement> <stm> <castling> <ep> c9 "1-0";`
+///     (no move counters; result encoded `1-0`/`0-1`/`1/2-1/2`).
+///   - lichess-big3-resolved: `<full fen> [<0.0|0.5|1.0>]` (bracketed white-score;
+///     the FEN carries its own counters).
+///
+/// Returns None for blank/uncommented/malformed lines (skipped by the loader).
+fn parse_line(line: &str) -> Option<(String, f64)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    if let Some((fen4, tail)) = line.split_once(" c9 ") {
+        // zurichess: counters absent, append a synthetic halfmove/fullmove.
+        let result = if tail.contains("1-0") {
+            1.0
+        } else if tail.contains("0-1") {
+            0.0
+        } else {
+            0.5
+        };
+        return Some((format!("{fen4} 0 1"), result));
+    }
+    if let Some((fen, tail)) = line.split_once('[') {
+        // big3: bracketed white-relative score, full FEN already present.
+        let score = tail.trim_end_matches(']').trim();
+        let result = score.parse::<f64>().ok()?;
+        return Some((fen.trim().to_string(), result));
+    }
+    None
+}
+
 fn eval_sample(s: &Sample, p: &[f64]) -> f64 {
     // p layout: [0..N) = mg, [N..2N) = eg
     let (wmg, weg) = (s.phase as f64 / 24.0, (24 - s.phase) as f64 / 24.0);
@@ -51,15 +132,122 @@ fn sigmoid(k: f64, e: f64) -> f64 {
     1.0 / (1.0 + 10f64.powf(-k * e / 400.0))
 }
 
+/// Sum of squared errors over one contiguous slice, summed in slice order.
+fn sse_chunk(samples: &[Sample], p: &[f64], k: f64) -> f64 {
+    let mut acc = 0.0;
+    for s in samples {
+        let d = s.result - sigmoid(k, eval_sample(s, p));
+        acc += d * d;
+    }
+    acc
+}
+
+/// Parallel MSE. Deterministic across core counts: `train` is split into a fixed
+/// `NUM_CHUNKS` contiguous chunks; a pool of workers claims chunk indices off an
+/// atomic cursor, each returning `(chunk_idx, partial_sse)` pairs; the main thread
+/// places them by index and reduces in chunk-index order. (See the module-level
+/// determinism note.) Returning per-chunk results keeps the code unsafe-free.
 fn mse(samples: &[Sample], p: &[f64], k: f64) -> f64 {
-    samples
-        .iter()
-        .map(|s| {
-            let d = s.result - sigmoid(k, eval_sample(s, p));
-            d * d
-        })
-        .sum::<f64>()
-        / samples.len() as f64
+    let bounds = chunk_bounds(samples.len());
+    let cursor = AtomicUsize::new(0);
+    let threads = num_threads().min(NUM_CHUNKS);
+    let mut partials = vec![0f64; NUM_CHUNKS];
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let cursor = &cursor;
+                let bounds = &bounds;
+                scope.spawn(move || {
+                    let mut out: Vec<(usize, f64)> = Vec::new();
+                    loop {
+                        let c = cursor.fetch_add(1, Ordering::Relaxed);
+                        if c >= NUM_CHUNKS {
+                            break;
+                        }
+                        let (lo, hi) = bounds[c];
+                        out.push((c, sse_chunk(&samples[lo..hi], p, k)));
+                    }
+                    out
+                })
+            })
+            .collect();
+        for h in handles {
+            for (c, v) in h.join().unwrap() {
+                partials[c] = v;
+            }
+        }
+    });
+    // Reduce in chunk-index order — fixed regardless of which worker did which.
+    let mut total = 0.0;
+    for v in &partials {
+        total += *v;
+    }
+    total / samples.len() as f64
+}
+
+/// Accumulate the (unnormalized) `2*N` gradient over one contiguous slice, in
+/// slice order. `scale = k*ln(10)/400`. p layout: [0..N)=mg, [N..2N)=eg.
+fn grad_chunk(samples: &[Sample], p: &[f64], k: f64, scale: f64) -> Vec<f64> {
+    let mut grad = vec![0f64; 2 * N];
+    for s in samples {
+        let ev = eval_sample(s, p);
+        let pr = sigmoid(k, ev);
+        // d(MSE)/d(param) = -2 (r - p) p(1-p) scale * feature_gradient
+        let common = -2.0 * (s.result - pr) * pr * (1.0 - pr) * scale;
+        let wmg = s.phase as f64 / 24.0;
+        let weg = (24 - s.phase) as f64 / 24.0;
+        for &(idx, sign) in &s.features {
+            let i = idx as usize;
+            grad[i] += common * sign as f64 * wmg; // mg gradient
+            grad[N + i] += common * sign as f64 * weg; // eg gradient
+        }
+    }
+    grad
+}
+
+/// Parallel full-batch gradient. Deterministic across core counts: the SAME fixed
+/// `NUM_CHUNKS` partition as `mse`; workers claim chunks off an atomic cursor and
+/// return `(chunk_idx, partial_grad)`; the main thread sums the per-chunk gradient
+/// vectors in chunk-index order. Float addition is non-associative, so a FIXED
+/// reduction order is what guarantees identical output regardless of thread count.
+fn gradient(samples: &[Sample], p: &[f64], k: f64, scale: f64) -> Vec<f64> {
+    let bounds = chunk_bounds(samples.len());
+    let cursor = AtomicUsize::new(0);
+    let threads = num_threads().min(NUM_CHUNKS);
+    let mut chunk_grads: Vec<Option<Vec<f64>>> = (0..NUM_CHUNKS).map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let cursor = &cursor;
+                let bounds = &bounds;
+                scope.spawn(move || {
+                    let mut out: Vec<(usize, Vec<f64>)> = Vec::new();
+                    loop {
+                        let c = cursor.fetch_add(1, Ordering::Relaxed);
+                        if c >= NUM_CHUNKS {
+                            break;
+                        }
+                        let (lo, hi) = bounds[c];
+                        out.push((c, grad_chunk(&samples[lo..hi], p, k, scale)));
+                    }
+                    out
+                })
+            })
+            .collect();
+        for h in handles {
+            for (c, g) in h.join().unwrap() {
+                chunk_grads[c] = Some(g);
+            }
+        }
+    });
+    // Reduce per-chunk gradients in chunk-index order.
+    let mut grad = vec![0f64; 2 * N];
+    for cg in chunk_grads.into_iter().flatten() {
+        for i in 0..2 * N {
+            grad[i] += cg[i];
+        }
+    }
+    grad
 }
 
 /// Warm-start: read PARAMS pairs -> p[i]=mg, p[N+i]=eg.
@@ -120,18 +308,11 @@ fn main() {
     let data = std::fs::read_to_string(path).expect("read epd");
     let mut samples = Vec::new();
     for line in data.lines() {
-        // format: <placement> <stm> <castling> <ep> c9 "1-0"; (counters absent)
-        let Some((fen4, tail)) = line.split_once(" c9 ") else {
+        // Sniff zurichess `c9 "result"` vs big3 `[white-score]` per line.
+        let Some((fen, result)) = parse_line(line) else {
             continue;
         };
-        let result = if tail.contains("1-0") {
-            1.0
-        } else if tail.contains("0-1") {
-            0.0
-        } else {
-            0.5
-        };
-        let Ok(pos) = Position::from_fen(&format!("{fen4} 0 1")) else {
+        let Ok(pos) = Position::from_fen(&fen) else {
             continue;
         };
         samples.push(extract(&pos, result));
@@ -164,21 +345,14 @@ fn main() {
     let (b1, b2, eps) = (0.9, 0.999, 1e-8);
     let scale = k * f64::ln(10.0) / 400.0; // d/dx sigmoid10(kx/400) factor
 
+    // Overfit watchdog state (reported at the 50-epoch val checks, not enforced).
+    let mut prev_val = warm_mse; // seed with the warm-start train MSE proxy
+    let mut val_rises = 0usize;
+
     for epoch in 1..=epochs {
-        let mut grad = vec![0f64; 2 * N];
-        for s in train.iter() {
-            let ev = eval_sample(s, &p);
-            let pr = sigmoid(k, ev);
-            // d(MSE)/d(param) = -2 (r - p) p(1-p) scale * feature_gradient
-            let common = -2.0 * (s.result - pr) * pr * (1.0 - pr) * scale;
-            let wmg = s.phase as f64 / 24.0;
-            let weg = (24 - s.phase) as f64 / 24.0;
-            for &(idx, sign) in &s.features {
-                let i = idx as usize;
-                grad[i] += common * sign as f64 * wmg; // mg gradient
-                grad[N + i] += common * sign as f64 * weg; // eg gradient
-            }
-        }
+        // Parallel full-batch gradient (deterministic chunked reduce); the Adam
+        // step below stays serial — it's O(params), trivial.
+        let grad = gradient(train, &p, k, scale);
         let n = train.len() as f64;
         for i in 0..2 * N {
             let g = grad[i] / n;
@@ -192,11 +366,24 @@ fn main() {
         repin(&mut p);
 
         if epoch % 50 == 0 {
-            eprintln!(
-                "epoch {epoch}: train {:.6} val {:.6}",
-                mse(train, &p, k),
-                mse(val, &p, k)
-            );
+            let tr = mse(train, &p, k);
+            let va = mse(val, &p, k);
+            eprintln!("epoch {epoch}: train {tr:.6} val {va:.6}");
+            // Overfit watchdog: REPORT (don't abort — the controller's SPRT is the
+            // real gate, and a truncated emit would surprise) if val MSE rises for
+            // 3 consecutive checks.
+            if va > prev_val {
+                val_rises += 1;
+                if val_rises >= 3 {
+                    eprintln!(
+                        "  [early-stop signal] val MSE rose {val_rises} checks running \
+                         (last {prev_val:.6} -> {va:.6}); possible overfit"
+                    );
+                }
+            } else {
+                val_rises = 0;
+            }
+            prev_val = va;
         }
     }
     let final_train = mse(train, &p, k);
