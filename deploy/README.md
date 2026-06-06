@@ -12,7 +12,7 @@ always-on; the engine itself needs no changes.
 
 | File | What it does |
 |------|--------------|
-| `deploy/Dockerfile` | Multi-stage build: compiles `nebchess` (Rust 1.96), then runs lichess-bot `v1.1.3` on Python 3.12 with the engine binary in `engines/nebchess`. |
+| `deploy/Dockerfile` | Multi-stage build: compiles `nebchess` (Rust 1.96), then runs lichess-bot (pinned master commit) on Python 3.12 with the engine binary in `engines/nebchess`. |
 | `deploy/config.yml` | lichess-bot config (UCI, hash/overhead, which challenges to accept). Token is **blank** — injected at runtime. |
 | `railway.json` (repo root) | Tells Railway to build `deploy/Dockerfile` and keep the service running (`restartPolicyType: ALWAYS`). |
 | `.dockerignore` (repo root) | Keeps the build context small/fast. |

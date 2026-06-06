@@ -1,5 +1,5 @@
 # lichess-bot configuration for the NebChess UCI engine.
-# Trimmed from upstream config.yml.default (lichess-bot v1.1.3).
+# Trimmed from upstream config.yml.default (lichess-bot master).
 #
 # The token is intentionally left BLANK: set the LICHESS_BOT_TOKEN environment
 # variable (e.g. a Railway service variable) and lichess-bot will use it,

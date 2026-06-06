@@ -19,9 +19,11 @@ RUN cargo build --release --bin nebchess
 # ---- Stage 2: lichess-bot runtime -------------------------------------------
 FROM python:3.12-slim AS runtime
 
-# Pin lichess-bot to a release tag for reproducible deploys. Override at build
-# time with --build-arg LICHESS_BOT_REF=<tag>.
-ARG LICHESS_BOT_REF=v1.1.3
+# Pin lichess-bot to a specific master commit for reproducible deploys. The
+# tagged releases (latest 1.1.3) predate env-var token support and modern deps;
+# master is the maintained line and the recommended install. Override at build
+# time with --build-arg LICHESS_BOT_REF=<commit-sha>.
+ARG LICHESS_BOT_REF=ad4b56621bb0e6c52925212639fb73e8ce5ae451
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -34,8 +36,11 @@ RUN apt-get update \
 RUN useradd --create-home --uid 10001 bot
 WORKDIR /home/bot/lichess-bot
 
-RUN git clone --depth 1 --branch "${LICHESS_BOT_REF}" \
-      https://github.com/lichess-bot-devs/lichess-bot.git . \
+# Shallow-fetch the pinned commit (GitHub allows fetching a SHA directly).
+RUN git init -q . \
+ && git remote add origin https://github.com/lichess-bot-devs/lichess-bot.git \
+ && git fetch --depth 1 origin "${LICHESS_BOT_REF}" \
+ && git checkout -q FETCH_HEAD \
  && pip install --no-cache-dir -r requirements.txt \
  && apt-get purge -y --auto-remove git
 
