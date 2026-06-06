@@ -41,8 +41,18 @@ challenge:                  # which incoming challenges to auto-accept
   min_increment: 0
   max_increment: 180
 
-matchmaking:
-  allow_matchmaking: false  # start purely reactive; flip to true to seek games
+matchmaking:                 # the bot seeks out and challenges other bots
+  allow_matchmaking: true    # requires the token to also have the challenge:write scope
+  challenge_variant: "standard"
+  challenge_mode: "rated"    # play rated games so the bot establishes a real rating
+  challenge_timeout: 5       # minutes idle before creating a new challenge
+  challenge_initial_time:    # base time (seconds) chosen at random per challenge
+    - 180                    # 3+2
+    - 300                    # 5+2
+  challenge_increment:
+    - 2
+  opponent_rating_difference: 300  # only challenge bots within +/- 300 of our rating
+  rating_preference: "none"
 
 greeting:
   hello: "Hi! I'm NebChess, a from-scratch Rust engine. gl hf!"
