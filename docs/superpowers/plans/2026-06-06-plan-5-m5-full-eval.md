@@ -647,6 +647,16 @@ fn threat_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32
 - [ ] **Step 6.3: The full joint tune.** All manifest params (~1000 pairs), 90/10 split, 300 epochs (early-stop report if val MSE rises 3 checks running): `cargo build --release && ./target/release/tune tools/data/<dataset> 300 0.05 > /tmp/eval_params_new.rs && cp /tmp/eval_params_new.rs src/eval/eval_params.rs` — NEVER redirect `cargo run` straight into eval_params.rs: the shell truncates the file before cargo compiles the library that includes it, destroying the params and failing the build (T4 incident; tune.rs doc-comment carries the same warning). REPORT dataset used, wall time, K, MSE trajectory. `cargo test` (value-dependent rebaselines per convention), bench twice, commit `feat(eval): full-scale joint Texel tune` + Bench.
 - [ ] **Step 6.4 (CONTROLLER):** canary → SPRT #6 [0,5] vs `baseline-threats` → `tools/baseline.sh m5-tune`. (If H0: unlike M4's pipeline gate this one is NOT tolerated — a full retune that loses to its seed means something's wrong; stop and investigate, likely overfit or dataset format bug.)
 
+**Step 6.5 (CONTINGENCY, user-specified 2026-06-06 — ran when SPRT #6 went negative with canary 269 = project high; "tactically sharper ≠ stronger engine"):**
+On H0: T5 values stay baseline. Surgical revert — restore `eval_params.rs` from `021646d` (the VALUES are the failed claim; the parallel tuner, big3 loader, and download tooling from b030465 are infrastructure and STAY); rebuild, bench must return to 71571, one canary sanity (~267). Big3 is *useful failed evidence*: bigger data is promising, but the tuning setup needs scale/phase controls first. Investigation order (each candidate gets canary + fixed 400-game probe vs baseline-threats; only the best survivor gets the full frozen-protocol [0,5] SPRT):
+1. **Refit K on big3, then retune** — the sanctioned *deliberate* re-anchoring act (NOT the banned silent per-run refit): does the mg-deflate/eg-inflate phase distortion collapse when K matches the corpus? Any shipping candidate still requires margin revalidation + fresh canary per the K-freeze law.
+2. **Anchor material harder** — freeze or tightly bound P/N/B/R/Q mg/eg ratios (queen/rook especially) during the big3 tune.
+3. **Phase-balanced big3 subsample** — equalize opening/middlegame/endgame distribution before tuning.
+4. **Hybrid dataset** — curated zurichess + big3 mixed, weighted toward curated quiet positions.
+5. **Static search-margin audit** — pruning trigger rates T5-values vs big3-values (RFP fired, futility skipped, null attempted, beta cutoffs, qnodes, fail-highs); counters behind a compile feature so the release path and Bench are untouched.
+6. **Eval disagreement set** — sample positions where the two value sets differ >150cp; classify (material sacs, endgames, quiet conversion, king safety, passed pawns). Needs a tiny `eval` UCI debug command (print static eval) — useful permanently.
+Diagnostics 5–6 run on existing artifacts and may run alongside 1–4 (serialized with any matches per the idle-system rule).
+
 ---
 
 ### Task 7: M5 wrap — upshifted anchored gauntlet + release
