@@ -168,10 +168,13 @@ if [[ -s "$RATINGS_FILE" ]]; then
 fi
 echo "(total binaries verified incl. archival: $VERIFIED)"
 
-# The gauntlet needs the pool; archival binaries don't count toward the guard.
-if [[ $POOL_VERIFIED -lt 3 ]]; then
+# The gauntlet needs the FULL pool; archival binaries don't count toward the
+# guard. A partial pool is blocked outright: silently dropping a rung —
+# especially v21, the 2714 ceiling — shifts the Ordo anchor math and any
+# absolute-rating claim bracketed by it (review finding on b04d2ee).
+if [[ $POOL_VERIFIED -lt ${#IN_POOL[@]} ]]; then
     echo "" >&2
-    echo "BLOCKED: only $POOL_VERIFIED pool anchor(s) verified; minimum 3 required." >&2
+    echo "BLOCKED: only $POOL_VERIFIED of ${#IN_POOL[@]} pool anchors verified; the gauntlet requires the full pool." >&2
     echo "Failed engines:" >&2
     printf "%b\n" "$ERRORS" >&2
     exit 1
