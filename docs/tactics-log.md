@@ -14,3 +14,5 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-05 | qsearch TT @ 8554de1 | 266/299 | clean — cache, not a prune |
 | 2026-06-05 | Texel-tuned PST+material @ 78d2fc6 | 258/299 | −8 (below the 10 floor): tuned Q=1049 likely dims sacrifice appetite; SPRT is the arbiter — if H0, tables revert per gate semantics |
 | 2026-06-06 | Tapered mg/eg + retune @ 1d0bdfe | 267/299 | **+9 — recovers the flat-tune dip** (queen mg/eg split frees middlegame sacrifice judgment); project high |
+| 2026-06-06 | pawn structure @ 82eab57 (degenerate K) | 257/299 | **CANARY FIRED (−10; paired rerun 258 vs 267)**: per-run K refit (1.520→1.377) slid the params down the K·eval degeneracy — pieces inflated ×1.09 vs fixed-cp margins + P_mg anchor; 11 broken / 2 rescued, breaks all sacrifice motifs (Rxg2+, Nf7, Qe6+, Rxh2+, Nf6+, Qh8+); NPS exonerated (−3.6%) |
+| 2026-06-06 | pawn structure, K frozen 1.520 @ c58d05d | 261/299 | fix verified — identical MSE at the validated scale (degeneracy bought zero fit); recovers the 6-position sacrifice cluster; −6 residual is pawn-term tax + threshold flips (5 new misses the *worse* build solved), within floor; SPRT arbitrates |
