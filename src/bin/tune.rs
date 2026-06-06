@@ -1,56 +1,41 @@
-//! Texel tuner (spec §6.3): fits material (N,B,R,Q; P=100 and K=0 anchored)
-//! and the six single-phase PSTs to game results over quiet-labeled.epd.
-//! Loss: MSE(result - sigmoid(K * eval / 400)); K fit once on the warm-start
-//! params, then frozen. Optimizer: Adam, full-batch analytic gradients (the
-//! eval is linear in every parameter). Emits a regenerated src/eval/psqt.rs
-//! on stdout:
-//!   cargo run --release --bin tune -- tools/data/quiet-labeled.epd > src/eval/psqt.rs
+//! Texel tuner v2: manifest-driven, trace-fed, phase-weighted.
+//!   cargo run --release --bin tune -- tools/data/quiet-labeled.epd > src/eval/eval_params.rs
 //! Optional args: [epochs=400] [lr=0.05] [limit=0(all)]
+//!
+//! Param vector: [mg_bank | eg_bank], each TOTAL_PAIRS long. A traced
+//! feature (idx, sign) at a position with phase ph contributes:
+//!   d(eval)/d(mg[idx]) = sign * ph/24,  d(eval)/d(eg[idx]) = sign * (24-ph)/24.
 
-use nebchess::board::{Color, PieceType, Position};
-use nebchess::eval::psqt::{MATERIAL, TABLES};
+use nebchess::board::Position;
+use nebchess::eval::hce::{eval_terms, phase};
+use nebchess::eval::manifest::{TERMS, TOTAL_PAIRS};
+use nebchess::eval::trace::CollectingTracer;
 
-const N_MATERIAL: usize = 4; // N, B, R, Q (P anchored 100, K anchored 0)
-const N_PARAMS: usize = N_MATERIAL + 6 * 64;
+const N: usize = TOTAL_PAIRS;
 
 struct Sample {
-    features: Vec<(u16, i8)>, // (param index, +1 white / -1 black)
-    pawn_diff: i32,           // anchored pawn material (not a parameter)
-    result: f64,              // 1.0 / 0.5 / 0.0 white-relative
+    features: Vec<(u16, i8)>,
+    phase: i32,
+    result: f64,
 }
 
 fn extract(pos: &Position, result: f64) -> Sample {
-    let mut features = Vec::with_capacity(32);
-    let mut pawn_diff = 0i32;
-    for pt in PieceType::ALL {
-        for sq in pos.piece_bb(Color::White, pt) {
-            features.push(((N_MATERIAL + pt.index() * 64 + (sq.index() ^ 56)) as u16, 1));
-            match pt {
-                PieceType::Pawn => pawn_diff += 100,
-                PieceType::King => {}
-                _ => features.push(((pt.index() - 1) as u16, 1)),
-            }
-        }
-        for sq in pos.piece_bb(Color::Black, pt) {
-            features.push(((N_MATERIAL + pt.index() * 64 + sq.index()) as u16, -1));
-            match pt {
-                PieceType::Pawn => pawn_diff -= 100,
-                PieceType::King => {}
-                _ => features.push(((pt.index() - 1) as u16, -1)),
-            }
-        }
-    }
+    let mut tr = CollectingTracer::default();
+    let _ = eval_terms(pos, &mut tr); // the REAL eval produces the features
     Sample {
-        features,
-        pawn_diff,
+        features: tr.features,
+        phase: phase(pos),
         result,
     }
 }
 
-fn eval(s: &Sample, params: &[f64; N_PARAMS]) -> f64 {
-    let mut e = s.pawn_diff as f64;
+fn eval_sample(s: &Sample, p: &[f64]) -> f64 {
+    // p layout: [0..N) = mg, [N..2N) = eg
+    let (wmg, weg) = (s.phase as f64 / 24.0, (24 - s.phase) as f64 / 24.0);
+    let mut e = 0.0;
     for &(idx, sign) in &s.features {
-        e += params[idx as usize] * sign as f64;
+        let i = idx as usize;
+        e += sign as f64 * (p[i] * wmg + p[N + i] * weg);
     }
     e
 }
@@ -59,75 +44,92 @@ fn sigmoid(k: f64, e: f64) -> f64 {
     1.0 / (1.0 + 10f64.powf(-k * e / 400.0))
 }
 
-fn mse(samples: &[Sample], params: &[f64; N_PARAMS], k: f64) -> f64 {
+fn mse(samples: &[Sample], p: &[f64], k: f64) -> f64 {
     samples
         .iter()
         .map(|s| {
-            let d = s.result - sigmoid(k, eval(s, params));
+            let d = s.result - sigmoid(k, eval_sample(s, p));
             d * d
         })
         .sum::<f64>()
         / samples.len() as f64
 }
 
-fn warm_start() -> [f64; N_PARAMS] {
-    let mut p = [0f64; N_PARAMS];
-    // material: indices 0..4 = N,B,R,Q from the current tables
-    for (i, pt) in [
-        PieceType::Knight,
-        PieceType::Bishop,
-        PieceType::Rook,
-        PieceType::Queen,
-    ]
-    .iter()
-    .enumerate()
-    {
-        p[i] = MATERIAL[pt.index()] as f64;
-    }
-    for pt in 0..6 {
-        for sq in 0..64 {
-            p[N_MATERIAL + pt * 64 + sq] = TABLES[pt][sq] as f64;
-        }
+/// Warm-start: read PARAMS pairs -> p[i]=mg, p[N+i]=eg.
+fn warm_start() -> Vec<f64> {
+    use nebchess::eval::eval_params::PARAMS;
+    let mut p = vec![0f64; 2 * N];
+    for i in 0..N {
+        p[i] = PARAMS[i].0 as f64; // mg bank
+        p[N + i] = PARAMS[i].1 as f64; // eg bank
     }
     p
 }
 
-fn emit(params: &[f64; N_PARAMS], k: f64, train_mse: f64, val_mse: f64) {
-    let names = ["PAWN", "KNIGHT", "BISHOP", "ROOK", "QUEEN", "KING"];
+/// Re-pin anchor: pawn mg = 100 (immovable).
+fn repin(p: &mut [f64]) {
+    use nebchess::eval::manifest;
+    p[manifest::MATERIAL] = 100.0; // P mg anchor
+}
+
+fn emit(p: &[f64], k: f64, train_mse: f64, val_mse: f64) {
+    let today = "2026-06-06";
     println!("//! GENERATED by `cargo run --release --bin tune`. Do not edit.");
-    println!("//! Texel-tuned on quiet-labeled.epd (725k, MIT). K = {k:.3},");
-    println!("//! train MSE = {train_mse:.6}, validation MSE = {val_mse:.6}.");
-    println!("//! Layout: rank-8 row first; white reads PST[sq ^ 56], black PST[sq].");
-    println!();
-    let m = |i: usize| params[i].round() as i32;
     println!(
-        "pub const MATERIAL: [i32; 6] = [100, {}, {}, {}, {}, 0]; // P N B R Q K",
-        m(0),
-        m(1),
-        m(2),
-        m(3)
+        "//! (retuned {today}; K = {k:.3}, train MSE = {train_mse:.6}, val MSE = {val_mse:.6})"
     );
-    for (pt, name) in names.iter().enumerate() {
-        println!();
-        println!("#[rustfmt::skip]");
-        println!("pub const {name}: [i32; 64] = [");
-        for row in 0..8 {
-            let cells: Vec<String> = (0..8)
-                .map(|col| {
-                    format!(
-                        "{:>4},",
-                        params[N_MATERIAL + pt * 64 + row * 8 + col].round() as i32
-                    )
-                })
-                .collect();
-            println!("    {}", cells.join(""));
+    println!("//! Layout: manifest order, one `(mg, eg)` pair per parameter.");
+    println!("//! PST layout: rank-8 row first; white reads PST[sq ^ 56], black PST[sq].");
+    println!();
+    println!("pub static PARAMS: [(i32, i32); crate::eval::manifest::TOTAL_PAIRS] = [");
+
+    let r = |v: f64| v.round() as i32;
+    let mut off = 0usize;
+    for term in TERMS {
+        match term.name {
+            "MATERIAL" => {
+                print!("    // MATERIAL: P N B R Q K\n    ");
+                for i in 0..term.len {
+                    let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
+                    if i < term.len - 1 {
+                        print!("({mg}, {eg}), ");
+                    } else {
+                        println!("({mg}, {eg}),");
+                    }
+                }
+            }
+            name if name.starts_with("PST_") => {
+                let piece = &name[4..]; // e.g. "PAWN"
+                println!("    // PST_{piece} (64 pairs, 8 per line)");
+                for row in 0..8 {
+                    print!("    ");
+                    for col in 0..8 {
+                        let i = row * 8 + col;
+                        let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
+                        if col < 7 {
+                            print!("({mg:>4},{eg:>4}), ");
+                        } else {
+                            println!("({mg:>4},{eg:>4}),");
+                        }
+                    }
+                }
+            }
+            name => {
+                println!("    // {name} ({} pairs)", term.len);
+                print!("    ");
+                for i in 0..term.len {
+                    let (mg, eg) = (r(p[off + i]), r(p[N + off + i]));
+                    print!("({mg}, {eg})");
+                    if i < term.len - 1 {
+                        print!(", ");
+                    }
+                }
+                println!(",");
+            }
         }
-        println!("];");
+        off += term.len;
     }
-    println!();
-    println!(
-        "pub const TABLES: [&[i32; 64]; 6] = [&PAWN, &KNIGHT, &BISHOP, &ROOK, &QUEEN, &KING];"
-    );
+    println!("];");
 }
 
 fn main() {
@@ -165,14 +167,15 @@ fn main() {
     let split = samples.len() * 9 / 10;
     let (train, val) = samples.split_at(split);
 
-    let mut params = warm_start();
+    let mut p = warm_start();
+    repin(&mut p);
 
     // fit K once on the warm-start params (coarse-to-fine line search)
     let mut k = 1.0;
     let mut step = 0.5;
     for _ in 0..12 {
-        let (lo, hi) = (mse(train, &params, k - step), mse(train, &params, k + step));
-        let mid = mse(train, &params, k);
+        let (lo, hi) = (mse(train, &p, k - step), mse(train, &p, k + step));
+        let mid = mse(train, &p, k);
         if lo < mid && lo <= hi {
             k -= step;
         } else if hi < mid {
@@ -181,41 +184,52 @@ fn main() {
             step /= 2.0;
         }
     }
-    eprintln!(
-        "fitted K = {k:.4}, initial train MSE = {:.6}",
-        mse(train, &params, k)
-    );
+    let warm_mse = mse(train, &p, k);
+    eprintln!("fitted K = {k:.4}, warm train MSE = {warm_mse:.6}");
 
-    // Adam, full batch
-    let (mut m, mut v) = ([0f64; N_PARAMS], [0f64; N_PARAMS]);
+    // Adam, full batch — two separate moment banks (mg and eg)
+    let mut m_mom = vec![0f64; 2 * N];
+    let mut v_mom = vec![0f64; 2 * N];
     let (b1, b2, eps) = (0.9, 0.999, 1e-8);
     let scale = k * f64::ln(10.0) / 400.0; // d/dx sigmoid10(kx/400) factor
+
     for epoch in 1..=epochs {
-        let mut grad = [0f64; N_PARAMS];
-        for s in train {
-            let p = sigmoid(k, eval(s, &params));
-            // d(MSE)/d(param) = -2 (r - p) p(1-p) scale * sign
-            let common = -2.0 * (s.result - p) * p * (1.0 - p) * scale;
+        let mut grad = vec![0f64; 2 * N];
+        for s in train.iter() {
+            let ev = eval_sample(s, &p);
+            let pr = sigmoid(k, ev);
+            // d(MSE)/d(param) = -2 (r - p) p(1-p) scale * feature_gradient
+            let common = -2.0 * (s.result - pr) * pr * (1.0 - pr) * scale;
+            let wmg = s.phase as f64 / 24.0;
+            let weg = (24 - s.phase) as f64 / 24.0;
             for &(idx, sign) in &s.features {
-                grad[idx as usize] += common * sign as f64;
+                let i = idx as usize;
+                grad[i] += common * sign as f64 * wmg; // mg gradient
+                grad[N + i] += common * sign as f64 * weg; // eg gradient
             }
         }
         let n = train.len() as f64;
-        for i in 0..N_PARAMS {
+        for i in 0..2 * N {
             let g = grad[i] / n;
-            m[i] = b1 * m[i] + (1.0 - b1) * g;
-            v[i] = b2 * v[i] + (1.0 - b2) * g * g;
-            let mh = m[i] / (1.0 - b1.powi(epoch as i32));
-            let vh = v[i] / (1.0 - b2.powi(epoch as i32));
-            params[i] -= lr * 100.0 * mh / (vh.sqrt() + eps); // cp-scale lr
+            m_mom[i] = b1 * m_mom[i] + (1.0 - b1) * g;
+            v_mom[i] = b2 * v_mom[i] + (1.0 - b2) * g * g;
+            let mh = m_mom[i] / (1.0 - b1.powi(epoch as i32));
+            let vh = v_mom[i] / (1.0 - b2.powi(epoch as i32));
+            p[i] -= lr * 100.0 * mh / (vh.sqrt() + eps); // cp-scale lr
         }
+        // AFTER EVERY STEP: re-pin the anchor — P mg = 100
+        repin(&mut p);
+
         if epoch % 50 == 0 {
             eprintln!(
                 "epoch {epoch}: train {:.6} val {:.6}",
-                mse(train, &params, k),
-                mse(val, &params, k)
+                mse(train, &p, k),
+                mse(val, &p, k)
             );
         }
     }
-    emit(&params, k, mse(train, &params, k), mse(val, &params, k));
+    let final_train = mse(train, &p, k);
+    let final_val = mse(val, &p, k);
+    eprintln!("final: train {final_train:.6} val {final_val:.6}");
+    emit(&p, k, final_train, final_val);
 }

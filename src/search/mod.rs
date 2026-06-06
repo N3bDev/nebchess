@@ -12,7 +12,6 @@ use std::time::Instant;
 use crate::search::tt::Tt;
 
 use crate::board::{generate_moves, Move, MoveList, PieceType, Position};
-use crate::eval::psqt::MATERIAL;
 use crate::eval::Evaluator;
 use crate::search::limits::{Limits, TimeManager};
 
@@ -92,6 +91,10 @@ struct MovePicker {
     cur: usize,
 }
 
+/// MVV victim values for ordering only — deliberately decoupled from the
+/// tunable eval material (retunes must not silently reshape move ordering).
+const VICTIM_VALS: [i32; 6] = [100, 320, 330, 500, 900, 0];
+
 /// LVA values: unlike eval MATERIAL, the king must rank as the MOST
 /// expensive attacker (it was 0 there, sorting king-captures first).
 const ATTACKER_VALS: [i32; 6] = [100, 320, 330, 500, 900, 10_000];
@@ -117,7 +120,7 @@ impl MovePicker {
                     pos.piece_on(mv.to()).expect("capture target").piece_type()
                 };
                 let attacker = pos.piece_on(mv.from()).expect("mover").piece_type();
-                1_000_000 + 10 * MATERIAL[victim.index()] - ATTACKER_VALS[attacker.index()]
+                1_000_000 + 10 * VICTIM_VALS[victim.index()] - ATTACKER_VALS[attacker.index()]
             } else if mv == killers[0] {
                 900_000
             } else if mv == killers[1] {
