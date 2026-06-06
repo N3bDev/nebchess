@@ -3,11 +3,24 @@
 //!     > /tmp/eval_params_new.rs && cp /tmp/eval_params_new.rs src/eval/eval_params.rs
 //! NEVER `cargo run ... > src/eval/eval_params.rs`: the shell truncates the params
 //! file before cargo compiles the library that includes it (build fails, params lost).
-//! Optional args: [epochs=400] [lr=0.05] [limit=0(all)]
+//! Optional args: [epochs=400] [lr=0.05] [limit=0(all)] [mode: fit-k|pin-material]
 //!
 //! Param vector: [mg_bank | eg_bank], each TOTAL_PAIRS long. A traced
 //! feature (idx, sign) at a position with phase ph contributes:
 //!   d(eval)/d(mg[idx]) = sign * ph/24,  d(eval)/d(eg[idx]) = sign * (24-ph)/24.
+//!
+//! Experiment modes (step 6.5 big3 investigation; opt-in via a 5th CLI arg):
+//!   fit-k         — re-enable the coarse-to-fine K line search (fit on the
+//!                   warm-start params before the epoch loop) and REPORT the
+//!                   fitted K. This is the DELIBERATE re-anchoring act per the
+//!                   K-freeze law: any shipping candidate from this mode needs
+//!                   margin revalidation + a fresh tactics canary. The default
+//!                   path stays frozen at K_FROZEN.
+//!   pin-material  — K stays frozen; after EVERY Adam step re-pin the ENTIRE
+//!                   MATERIAL row (all 6 pairs, BOTH banks) to the compiled-in
+//!                   PARAMS values (the T5 material), not just P_mg=100.
+//! The two modes are mutually exclusive. With no mode given the behavior is
+//! byte-identical to the default path (the determinism guarantee below holds).
 //!
 //! Parallelism & determinism (std::thread::scope, no external crates):
 //! The per-sample gradient and MSE loops — the dominant cost — are parallel;
@@ -67,6 +80,19 @@ fn num_threads() -> usize {
 /// Sigmoid scale, fitted once at the tapered foundation (M5 T1) and frozen.
 /// See the comment at its use site before changing this.
 const K_FROZEN: f64 = 1.520;
+
+/// Opt-in experiment mode selected by the optional 5th CLI arg. `Default` is
+/// the production path (frozen K, P_mg=100 anchor) and is byte-identical to the
+/// pre-experiment tuner. The two named modes are mutually exclusive — see the
+/// module-level doc-comment for the step-6.5 rationale.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Default,
+    /// Re-enable the coarse-to-fine K line search (deliberate re-anchoring).
+    FitK,
+    /// Frozen K, but re-pin the whole MATERIAL row to compiled-in PARAMS.
+    PinMaterial,
+}
 
 struct Sample {
     features: Vec<(u16, i8)>,
@@ -261,10 +287,30 @@ fn warm_start() -> Vec<f64> {
     p
 }
 
-/// Re-pin anchor: pawn mg = 100 (immovable).
-fn repin(p: &mut [f64]) {
+/// Re-pin anchors after an Adam step.
+///   - `Mode::Default` / `Mode::FitK`: pin only pawn mg = 100 (immovable) —
+///     byte-identical to the production tuner.
+///   - `Mode::PinMaterial`: additionally re-pin the ENTIRE MATERIAL row (all 6
+///     pairs, BOTH mg and eg banks) to the compiled-in PARAMS values (the T5
+///     material). This holds the material scale fixed so the big3 corpus tunes
+///     only the non-material knowledge (step 6.5 hypothesis 2). P_mg=100 falls
+///     out of this since PARAMS[MATERIAL].0 == 100.
+fn repin(p: &mut [f64], mode: Mode) {
+    use nebchess::eval::eval_params::PARAMS;
     use nebchess::eval::manifest;
-    p[manifest::MATERIAL] = 100.0; // P mg anchor
+    match mode {
+        Mode::Default | Mode::FitK => {
+            p[manifest::MATERIAL] = 100.0; // P mg anchor
+        }
+        Mode::PinMaterial => {
+            // MATERIAL is the first term: 6 pairs at flat offset `MATERIAL`.
+            for i in 0..6 {
+                p[manifest::MATERIAL + i] = PARAMS[manifest::MATERIAL + i].0 as f64; // mg bank
+                p[N + manifest::MATERIAL + i] = PARAMS[manifest::MATERIAL + i].1 as f64;
+                // eg bank
+            }
+        }
+    }
 }
 
 fn emit(p: &[f64], k: f64, train_mse: f64, val_mse: f64) {
@@ -300,10 +346,21 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let path = args
         .first()
-        .expect("usage: tune <epd> [epochs] [lr] [limit]");
+        .expect("usage: tune <epd> [epochs] [lr] [limit] [fit-k|pin-material]");
     let epochs: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(400);
     let lr: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.05);
     let limit: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // Optional 5th arg selects an opt-in experiment mode. Absent => Default
+    // (byte-identical to the production tuner). The single-arg encoding makes
+    // fit-k and pin-material mutually exclusive by construction; we still reject
+    // any unrecognized value rather than silently falling back.
+    let mode = match args.get(4).map(String::as_str) {
+        None => Mode::Default,
+        Some("fit-k") => Mode::FitK,
+        Some("pin-material") => Mode::PinMaterial,
+        Some(other) => panic!("unknown mode {other:?} (expected fit-k or pin-material)"),
+    };
 
     let data = std::fs::read_to_string(path).expect("read epd");
     let mut samples = Vec::new();
@@ -325,7 +382,7 @@ fn main() {
     let (train, val) = samples.split_at(split);
 
     let mut p = warm_start();
-    repin(&mut p);
+    repin(&mut p, mode);
 
     // K is FROZEN at the scale fitted for the tapered foundation (M5 T1).
     // Do NOT refit per run: MSE only sees the product K*eval, so refitting K
@@ -335,9 +392,42 @@ fn main() {
     // P_mg=100 anchor, and WAC dropped 267 -> 258 (tactics-log 2026-06-06).
     // Re-anchoring K is a deliberate act: it requires re-validating search
     // margins and a fresh tactics canary.
-    let k = K_FROZEN;
+    //
+    // `fit-k` (step 6.5 hypothesis 1) DELIBERATELY re-anchors K via the
+    // pre-c58d05d coarse-to-fine line search on the warm-start params, to test
+    // whether a K matched to the big3 corpus dissolves the mg-deflate/eg-inflate
+    // phase distortion. The fitted K is reported prominently below. Per the
+    // K-freeze law any shipping candidate from this mode still requires margin
+    // revalidation + a fresh tactics canary; the default path stays K_FROZEN.
+    let k = if mode == Mode::FitK {
+        // Coarse-to-fine line search (fit ONCE on warm-start params).
+        let mut k = 1.0;
+        let mut step = 0.5;
+        for _ in 0..12 {
+            let (lo, hi) = (mse(train, &p, k - step), mse(train, &p, k + step));
+            let mid = mse(train, &p, k);
+            if lo < mid && lo <= hi {
+                k -= step;
+            } else if hi < mid {
+                k += step;
+            } else {
+                step /= 2.0;
+            }
+        }
+        eprintln!("*** DELIBERATE K RE-ANCHORING (fit-k mode) ***");
+        eprintln!("*** fitted K_big3 = {k:.4} (default frozen K = {K_FROZEN}) ***");
+        eprintln!("*** shipping requires margin revalidation + fresh canary ***");
+        k
+    } else {
+        K_FROZEN
+    };
     let warm_mse = mse(train, &p, k);
-    eprintln!("frozen K = {k:.4}, warm train MSE = {warm_mse:.6}");
+    let k_label = if mode == Mode::FitK {
+        "fitted"
+    } else {
+        "frozen"
+    };
+    eprintln!("{k_label} K = {k:.4}, warm train MSE = {warm_mse:.6}");
 
     // Adam, full batch — two separate moment banks (mg and eg)
     let mut m_mom = vec![0f64; 2 * N];
@@ -362,8 +452,9 @@ fn main() {
             let vh = v_mom[i] / (1.0 - b2.powi(epoch as i32));
             p[i] -= lr * 100.0 * mh / (vh.sqrt() + eps); // cp-scale lr
         }
-        // AFTER EVERY STEP: re-pin the anchor — P mg = 100
-        repin(&mut p);
+        // AFTER EVERY STEP: re-pin the anchor(s) per mode — P mg = 100 by
+        // default, or the entire MATERIAL row under pin-material.
+        repin(&mut p, mode);
 
         if epoch % 50 == 0 {
             let tr = mse(train, &p, k);
