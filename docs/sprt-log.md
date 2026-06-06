@@ -19,5 +19,6 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-05 | Quiescence TT | futility | [0,5] | 1488 | 421-274-793 | **H1: +34.4 ±11.8** (canary 266 ✓) | 85636 |
 | 2026-06-05 | **Texel-tuned PST+material** (first learned eval) | qsearch-tt | [0,5] | 416 | 286-59-71 | **H1: +212.7 ±35.4** — largest gain in project history; WAC −8 accepted as the documented trade | 138119 |
 | 2026-06-06 | **Tapered mg/eg + trace arch + retune** (M5 T1) | texel-pst | [0,10] | 342 | 176-81-85 | **H1: +99.1 ±32.0** (canary 267 = project high; val MSE −3.3%) | 90242 |
+| 2026-06-06 | **Pawn structure + pawn hash, K frozen** (M5 T2) | tapered | [0,10] | 470 | 197-110-163 | **H1: +65.1 ±24.9** (0 timeouts; canary 261 = −6 accepted trade after K-degeneracy incident — see tactics-log) | 102691 |
 
 **M3 cumulative: +384.4 measured self-play elo over M2. M4 cumulative: +553.2 over M3** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only). Informational anchors: M3 closed 8-2 vs SF@1800; M4 closed 10-0 vs SF@2000.
