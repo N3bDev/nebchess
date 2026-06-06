@@ -558,6 +558,15 @@ with small helpers `file_mask(f) -> Bitboard`, `shield_rank(color, ksq, ahead) -
 
 - [ ] **Step 5.0 (MANDATORY, decided 2026-06-06 after T4's −13% NPS): shared attack-map pass.** Refactor BEFORE adding any new term: one pass per eval computes each piece's attack bitboard ONCE; mobility counts, king-safety zone-touch tests, and the threat-term unions all consume that single pass. Shape: fuse `mobility_terms` + the zone-attacker half of `king_safety_terms` into one piece loop (per piece: `att = attacks(sq, occ)` → mobility `add_term(MOB_* + (att & safe).count())`, enemy-king zone touch `add_term(KS_ATTACKER + slot, -sign)` — note the sign flip: KS records carry the DEFENDING king owner's sign, which is the negation of the piece owner's), accumulating `pawn_att/minor_att/all_att` unions per color for step 5.2. The king-centric shield/file half of king_safety_terms stays its own loop. **Identity gate: after the refactor and BEFORE the manifest append, `cargo test` green and `nebchess bench` == 99185 (bit-identical eval to 689f1cf) — commit the refactor separately (`refactor(eval): shared attack-map pass, bench-identical`) so the gate isolates the new terms.**
 
+  **Required geometric tests for the fused pass (user-specified 2026-06-06; write BEFORE the refactor, they must pass on the old code too — that's the point):**
+  1. White knight attacking the black king ring → trace records (KS_ATTACKER+0, sign −1) (black king is the subject) → white-relative eval contribution positive with the tuned penalty weights; assert the record sign (value-independent), and assert eval directionality by comparing against the same FEN with the knight retreated out of range.
+  2. Black knight attacking the white king ring → (KS_ATTACKER+0, sign +1); eval for White strictly worse than the retreated-knight twin.
+  3. Color-flipped mirror of an asymmetric king-attack FEN: white-relative evals negate exactly (extend `mirrored_position_negates` with a king-attack-asymmetric position).
+  4. Blocked slider does NOT count: rook on the king's file with an interposed pawn → no KS_ATTACKER record for it (occupancy honored in the fused pass).
+  5. Same FEN minus the blocker → the rook's KS_ATTACKER record appears.
+  6. Mobility unchanged: the existing exact-count trace tests (startpos MOB_KNIGHT+2 ×4, trapped-bishop MOB_BISHOP+0) pass UNCHANGED through the refactor, and the bench-identity gate (99185) pins the rest globally.
+  7. Shield/open-file record signs follow the KING OWNER, not any attacker: black king castled short with f7/g7/h7 shield → three (KS_SHIELD+0, sign −1) records; the T4 white-side test keeps passing as-is.
+
 - [ ] **Step 5.1: Manifest append** `THREAT_BY_PAWN(4)` (victim N/B/R/Q) `THREAT_BY_MINOR(4)` `HANGING(1)` `BISHOP_PAIR(1)` `ROOK_OPEN(1)` `ROOK_SEMI(1)` `TEMPO(1)` (+offsets). Seeds: THREAT_BY_PAWN `(30,20)×4 scaled up by victim — (25,15)(30,20)(45,30)(60,35)`, THREAT_BY_MINOR `(15,10)(15,10)(30,20)(40,25)`, HANGING `(25,15)`, BISHOP_PAIR `(25,45)`, ROOK_OPEN `(25,5)`, ROOK_SEMI `(12,3)`, TEMPO `(15,5)`.
 
 - [ ] **Step 5.2: Attack-map helper + the term.**
