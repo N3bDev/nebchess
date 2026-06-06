@@ -519,12 +519,46 @@ impl<E: Evaluator> SearchThread<E> {
         {
             return -(MATE - ply as i32);
         }
+
+        // Step 6.1: TT probe + cutoff at qsearch entry (any stored depth >= 0
+        // dominates a qsearch node which runs at depth 0).
+        let tt_hit = self.tt.probe(self.pos.key(), ply);
+        if let Some(ref h) = tt_hit {
+            match h.bound {
+                tt::Bound::Exact => return h.score,
+                tt::Bound::Lower if h.score >= beta => return h.score,
+                tt::Bound::Upper if h.score <= alpha => return h.score,
+                _ => {}
+            }
+        }
+        let tt_move = tt_hit.as_ref().map_or(Move::NULL, |h| h.mv);
+
+        let orig_alpha = alpha;
         let in_check = self.pos.in_check(self.pos.stm());
+        let mut best_move = Move::NULL;
         let mut best = if in_check {
+            // in-check: there is no meaningful static eval — store the sentinel
+            // so a later negamax probe of this entry recomputes instead of
+            // adopting a fake 0 (review hygiene: the eval field means
+            // "static eval of this position" or EVAL_NONE, never a placeholder)
+            self.stack[ply].static_eval = tt::EVAL_NONE;
             -INF // no stand-pat while in check: must find an evasion
         } else {
             let stand_pat = self.eval.evaluate(&self.pos);
+            // Step 6.2: the stand-pat IS the static eval in the not-in-check branch
+            self.stack[ply].static_eval = stand_pat;
             if stand_pat >= beta {
+                // Beta cutoff at stand-pat: store as Lower bound before returning.
+                // The in-check && legal==0 mate return stays un-stored (mirrors negamax).
+                self.tt.store(
+                    self.pos.key(),
+                    Move::NULL,
+                    stand_pat,
+                    stand_pat,
+                    0,
+                    tt::Bound::Lower,
+                    ply,
+                );
                 return stand_pat;
             }
             if stand_pat > alpha {
@@ -534,8 +568,10 @@ impl<E: Evaluator> SearchThread<E> {
         };
 
         let stm = self.pos.stm();
-        let mut picker =
-            MovePicker::new(&self.pos, Move::NULL, [Move::NULL; 2], &self.history, stm);
+        // Step 6.1: pass tt_move into the picker (a quiet TT move scores 2M
+        // but the !in_check && !mv.is_capture() filter below will skip it —
+        // harmless; captures and check-evasions get the ordering benefit).
+        let mut picker = MovePicker::new(&self.pos, tt_move, [Move::NULL; 2], &self.history, stm);
         let mut legal = 0u32;
         while let Some(mv) = picker.next() {
             // quiet moves only matter when evading check
@@ -558,6 +594,7 @@ impl<E: Evaluator> SearchThread<E> {
                 best = score;
                 if score > alpha {
                     alpha = score;
+                    best_move = mv;
                     self.pv.update(ply, mv);
                     if alpha >= beta {
                         break;
@@ -567,8 +604,28 @@ impl<E: Evaluator> SearchThread<E> {
         }
 
         if in_check && legal == 0 {
-            return -(MATE - ply as i32); // mate found inside qsearch
+            // Mate found in qsearch: un-stored (mirrors negamax).
+            return -(MATE - ply as i32);
         }
+
+        // Step 6.2: store on exit with bound classification.
+        // Exact with NULL move: stand-pat raised alpha (best_move stays NULL).
+        let bound = if best >= beta {
+            tt::Bound::Lower
+        } else if best > orig_alpha {
+            tt::Bound::Exact // may carry a NULL move: stand-pat raised alpha
+        } else {
+            tt::Bound::Upper
+        };
+        self.tt.store(
+            self.pos.key(),
+            best_move,
+            best,
+            self.stack[ply].static_eval,
+            0,
+            bound,
+            ply,
+        );
         best
     }
 
