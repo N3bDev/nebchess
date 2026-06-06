@@ -13,6 +13,10 @@ use nebchess::eval::trace::CollectingTracer;
 
 const N: usize = TOTAL_PAIRS;
 
+/// Sigmoid scale, fitted once at the tapered foundation (M5 T1) and frozen.
+/// See the comment at its use site before changing this.
+const K_FROZEN: f64 = 1.520;
+
 struct Sample {
     features: Vec<(u16, i8)>,
     phase: i32,
@@ -139,22 +143,17 @@ fn main() {
     let mut p = warm_start();
     repin(&mut p);
 
-    // fit K once on the warm-start params (coarse-to-fine line search)
-    let mut k = 1.0;
-    let mut step = 0.5;
-    for _ in 0..12 {
-        let (lo, hi) = (mse(train, &p, k - step), mse(train, &p, k + step));
-        let mid = mse(train, &p, k);
-        if lo < mid && lo <= hi {
-            k -= step;
-        } else if hi < mid {
-            k += step;
-        } else {
-            step /= 2.0;
-        }
-    }
+    // K is FROZEN at the scale fitted for the tapered foundation (M5 T1).
+    // Do NOT refit per run: MSE only sees the product K*eval, so refitting K
+    // lets Adam slide the whole param vector along that degeneracy — T2's
+    // refit (1.520 -> 1.377) inflated every piece value ~10% against the
+    // search's fixed-centipawn margins (futility/RFP/aspiration) and the
+    // P_mg=100 anchor, and WAC dropped 267 -> 258 (tactics-log 2026-06-06).
+    // Re-anchoring K is a deliberate act: it requires re-validating search
+    // margins and a fresh tactics canary.
+    let k = K_FROZEN;
     let warm_mse = mse(train, &p, k);
-    eprintln!("fitted K = {k:.4}, warm train MSE = {warm_mse:.6}");
+    eprintln!("frozen K = {k:.4}, warm train MSE = {warm_mse:.6}");
 
     // Adam, full batch — two separate moment banks (mg and eg)
     let mut m_mom = vec![0f64; 2 * N];
