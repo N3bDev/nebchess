@@ -164,7 +164,7 @@ fn pawn_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) 
     }
 }
 
-// ---- T3: mobility ----
+// ---- T3+T4: shared attack-map pass ----
 
 /// All squares attacked by `color`'s pawns (whole-set shift, no per-pawn loop).
 #[inline]
@@ -176,36 +176,123 @@ fn pawn_attack_set(pos: &Position, color: Color) -> Bitboard {
     }
 }
 
-/// Safe-mobility per piece: count attacked squares that are neither occupied by
-/// our own pieces nor attacked by an enemy pawn, indexing a per-piece table.
-/// A 0-mobility piece reads the most negative cell — that IS the trapped-piece
-/// term. Depends on ALL pieces (slider occupancy), so this is NOT pawn-cacheable:
-/// it runs in the fresh path of Hce::evaluate and in eval_terms (tuner path).
-fn mobility_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) {
-    let occ = pos.occ_all();
-    for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
-        // safe = not our own pieces, not attacked by an enemy pawn
-        let safe = !pos.occ(color) & !pawn_attack_set(pos, color.flip());
-        for sq in pos.piece_bb(color, PieceType::Knight) {
-            let n = (attacks::knight_attacks(sq) & safe).count() as usize;
-            add_term(m::MOB_KNIGHT + n, sign, t, mg, eg);
-        }
-        for sq in pos.piece_bb(color, PieceType::Bishop) {
-            let n = (attacks::bishop_attacks(sq, occ) & safe).count() as usize;
-            add_term(m::MOB_BISHOP + n, sign, t, mg, eg);
-        }
-        for sq in pos.piece_bb(color, PieceType::Rook) {
-            let n = (attacks::rook_attacks(sq, occ) & safe).count() as usize;
-            add_term(m::MOB_ROOK + n, sign, t, mg, eg);
-        }
-        for sq in pos.piece_bb(color, PieceType::Queen) {
-            let n = (attacks::queen_attacks(sq, occ) & safe).count() as usize;
-            add_term(m::MOB_QUEEN + n, sign, t, mg, eg);
-        }
-    }
+/// Per-color attack unions built once during the fused mobility / king-attacker
+/// pass and threaded out for the threat terms. Indexed by `Color::index()`.
+/// `pawn` is the pawn attack set (also consumed in-pass for the mobility `safe`
+/// mask); `minor` is the knight+bishop union; `all` is the full union of pawn,
+/// knight, bishop, rook, queen AND king attacks. `minor`/`all` are produced now
+/// so no slider attack is recomputed when step 5.2 adds threat/hanging terms.
+#[allow(dead_code)] // minor/all are read by the step 5.2 threat terms
+struct AttackMaps {
+    pawn: [Bitboard; 2],
+    minor: [Bitboard; 2],
+    all: [Bitboard; 2],
 }
 
-// ---- T4: king safety ----
+/// Fused safe-mobility + king-zone-attacker pass. Each piece's attack bitboard
+/// is computed EXACTLY ONCE and feeds three consumers. First, its safe-mobility
+/// count `add_term(MOB_* + (att & safe).count(), sign)`, where `safe` = squares
+/// neither our-own-occupied nor attacked by an enemy pawn (a 0-mobility piece
+/// reads the most negative cell — the trapped-piece term). Second, the
+/// enemy-king zone touch `add_term(KS_ATTACKER + slot, -sign)` — note the sign
+/// flip: the KS frame records the DEFENDING king owner's sign, the negation of
+/// the attacker's loop sign. Third, the per-color attack unions returned in
+/// `AttackMaps` (consumed by the step 5.2 threat terms).
+///
+/// Depends on ALL pieces (slider occupancy, both armies) -> NOT pawn-cacheable:
+/// runs fresh in `Hce::evaluate` AND in the tuner path (`eval_terms`). The
+/// king-centric shield/open-file half of king safety stays in `king_shield_terms`.
+fn mobility_and_attackers<T: Tracer>(
+    pos: &Position,
+    t: &mut T,
+    mg: &mut i32,
+    eg: &mut i32,
+) -> AttackMaps {
+    let occ = pos.occ_all();
+    let pawn = [
+        pawn_attack_set(pos, Color::White),
+        pawn_attack_set(pos, Color::Black),
+    ];
+    // King zones for the attacker test, indexed by the DEFENDING king's color.
+    let zone = [
+        attacks::king_attacks(pos.king_sq(Color::White)) | pos.king_sq(Color::White).bb(),
+        attacks::king_attacks(pos.king_sq(Color::Black)) | pos.king_sq(Color::Black).bb(),
+    ];
+    let mut minor = [Bitboard::EMPTY; 2];
+    let mut all = [Bitboard::EMPTY; 2];
+
+    for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
+        let ci = color.index();
+        let enemy = color.flip();
+        // safe = not our own pieces, not attacked by an enemy pawn
+        let safe = !pos.occ(color) & !pawn[enemy.index()];
+        // A piece touching the ENEMY king zone records the enemy king owner's
+        // sign (= -sign) against that king's zone.
+        let ezone = zone[enemy.index()];
+        let ks_sign = -sign;
+
+        for sq in pos.piece_bb(color, PieceType::Knight) {
+            let att = attacks::knight_attacks(sq);
+            minor[ci] |= att;
+            all[ci] |= att;
+            add_term(
+                m::MOB_KNIGHT + (att & safe).count() as usize,
+                sign,
+                t,
+                mg,
+                eg,
+            );
+            if (att & ezone).any() {
+                add_term(m::KS_ATTACKER, ks_sign, t, mg, eg);
+            }
+        }
+        for sq in pos.piece_bb(color, PieceType::Bishop) {
+            let att = attacks::bishop_attacks(sq, occ);
+            minor[ci] |= att;
+            all[ci] |= att;
+            add_term(
+                m::MOB_BISHOP + (att & safe).count() as usize,
+                sign,
+                t,
+                mg,
+                eg,
+            );
+            if (att & ezone).any() {
+                add_term(m::KS_ATTACKER + 1, ks_sign, t, mg, eg);
+            }
+        }
+        for sq in pos.piece_bb(color, PieceType::Rook) {
+            let att = attacks::rook_attacks(sq, occ);
+            all[ci] |= att;
+            add_term(m::MOB_ROOK + (att & safe).count() as usize, sign, t, mg, eg);
+            if (att & ezone).any() {
+                add_term(m::KS_ATTACKER + 2, ks_sign, t, mg, eg);
+            }
+        }
+        for sq in pos.piece_bb(color, PieceType::Queen) {
+            let att = attacks::queen_attacks(sq, occ);
+            all[ci] |= att;
+            add_term(
+                m::MOB_QUEEN + (att & safe).count() as usize,
+                sign,
+                t,
+                mg,
+                eg,
+            );
+            if (att & ezone).any() {
+                add_term(m::KS_ATTACKER + 3, ks_sign, t, mg, eg);
+            }
+        }
+        // King attacks and our pawn attacks join `all` (no mobility/attacker
+        // term for the king itself).
+        all[ci] |= attacks::king_attacks(pos.king_sq(color));
+        all[ci] |= pawn[ci];
+    }
+
+    AttackMaps { pawn, minor, all }
+}
+
+// ---- T4: king safety (shield / open-file half) ----
 
 /// All 8 squares of file `f` as a bitboard.
 #[inline]
@@ -231,45 +318,25 @@ fn shield_rank(color: Color, ksq: crate::board::Square, ahead: i8) -> Bitboard {
     }
 }
 
-/// King safety: enemy pieces touching the king zone (by type), pawn shield
-/// state on the king's file and its neighbors, and open/semi-open files near
-/// the king. Depends on ALL pieces (slider occupancy, both armies) -> NOT
-/// pawn-cacheable: like mobility, it runs fresh in Hce::evaluate AND in the
-/// tuner path (eval_terms).
+/// King safety, KING-CENTRIC half: pawn shield state on the king's file and its
+/// neighbors, and open/semi-open files near the king. The enemy-attacker half
+/// moved into the fused `mobility_and_attackers` pass (one attack computation
+/// per piece). This half depends only on pawn placement and the king square, so
+/// it has no slider occupancy dependence — but it still runs fresh (not
+/// pawn-cacheable) because it keys off the king square, which is not part of the
+/// pawn hash. Runs fresh in Hce::evaluate AND in the tuner path (eval_terms).
 ///
 /// SIGN CONVENTION: every feature is recorded in the white-relative frame with
 /// `sign = +1` when the WHITE king is the subject and `-1` when the black king
 /// is. The tuner learns whether each parameter is good or bad for the king's
-/// owner; penalties therefore come out NEGATIVE on their own (a white-king
-/// danger feature, recorded +1, gets a negative tuned weight). Shield bonuses
+/// owner; penalties therefore come out NEGATIVE on their own. Shield bonuses
 /// stay positive. The shield-file loop spans `kfile-1..=kfile+1` clamped to
 /// [0,7], so a king on the a/h file is scored over 2 files, not 3 — intended,
 /// matching standard HCE practice.
-fn king_safety_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) {
-    let occ = pos.occ_all();
+fn king_shield_terms<T: Tracer>(pos: &Position, t: &mut T, mg: &mut i32, eg: &mut i32) {
     for (color, sign) in [(Color::White, 1i32), (Color::Black, -1i32)] {
         let ksq = pos.king_sq(color);
-        let zone = attacks::king_attacks(ksq) | ksq.bb();
         let enemy = color.flip();
-        // Enemy attackers touching the king zone, counted per piece type.
-        for (pt, slot) in [
-            (PieceType::Knight, 0usize),
-            (PieceType::Bishop, 1),
-            (PieceType::Rook, 2),
-            (PieceType::Queen, 3),
-        ] {
-            for sq in pos.piece_bb(enemy, pt) {
-                let att = match pt {
-                    PieceType::Knight => attacks::knight_attacks(sq),
-                    PieceType::Bishop => attacks::bishop_attacks(sq, occ),
-                    PieceType::Rook => attacks::rook_attacks(sq, occ),
-                    _ => attacks::queen_attacks(sq, occ),
-                };
-                if (att & zone).any() {
-                    add_term(m::KS_ATTACKER + slot, sign, t, mg, eg);
-                }
-            }
-        }
         // Pawn shield + file state on the king's file and its neighbors.
         let own_pawns = pos.piece_bb(color, PieceType::Pawn);
         let all_pawns = own_pawns | pos.piece_bb(enemy, PieceType::Pawn);
@@ -326,11 +393,13 @@ pub fn eval_terms<T: Tracer>(pos: &Position, t: &mut T) -> (i32, i32) {
     }
     // T2: pawn structure (uncached — tuner path)
     pawn_terms(pos, t, &mut mg, &mut eg);
-    // T3: mobility (not pawn-cacheable — depends on all pieces)
-    mobility_terms(pos, t, &mut mg, &mut eg);
-    // T4: king safety (not pawn-cacheable — depends on all pieces)
-    king_safety_terms(pos, t, &mut mg, &mut eg);
-    // T5 threats append here
+    // T3+T4 attacker half: one attack computation per piece feeds mobility AND
+    // the king-zone-attacker records; the returned unions feed step 5.2 threats.
+    let _attack_maps = mobility_and_attackers(pos, t, &mut mg, &mut eg);
+    // T4: king safety, shield/open-file half (not pawn-cacheable — keys off the
+    // king square).
+    king_shield_terms(pos, t, &mut mg, &mut eg);
+    // T5 threats append here (will consume `_attack_maps`)
     (mg, eg)
 }
 
@@ -427,12 +496,14 @@ impl Evaluator for Hce {
         // Non-pawn material/PST computed fresh; pawn structure via hash.
         let (np_mg, np_eg) = eval_non_pawn_terms(pos);
         let (pw_mg, pw_eg) = pawn_terms_cached(&mut self.pawn_hash, pos);
-        // Mobility and king safety depend on all pieces -> NOT pawn-cacheable:
-        // compute fresh (NullTracer = zero cost) so the engine path matches
-        // eval_terms exactly.
+        // Mobility, king-zone attackers and king shields depend on the full
+        // board (slider occupancy / king square) -> NOT pawn-cacheable: compute
+        // fresh (NullTracer = zero cost) through the SAME fused pass eval_terms
+        // uses, so the engine path matches the tuner path exactly.
         let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
-        mobility_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
-        king_safety_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+        let _attack_maps =
+            mobility_and_attackers(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+        king_shield_terms(pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
         let white = blend(np_mg + pw_mg + fresh_mg, np_eg + pw_eg + fresh_eg, ph);
         if pos.stm() == Color::White {
             white
@@ -740,8 +811,9 @@ mod tests {
                     let np = eval_non_pawn_terms(&pos);
                     let pw = pawn_terms_cached(&mut hce.pawn_hash, &pos);
                     let (mut fresh_mg, mut fresh_eg) = (0i32, 0i32);
-                    mobility_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
-                    king_safety_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+                    let _ =
+                        mobility_and_attackers(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
+                    king_shield_terms(&pos, &mut NullTracer, &mut fresh_mg, &mut fresh_eg);
                     blend(np.0 + pw.0 + fresh_mg, np.1 + pw.1 + fresh_eg, ph)
                 };
                 if pos.stm() == Color::White {
