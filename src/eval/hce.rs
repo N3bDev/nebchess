@@ -532,6 +532,185 @@ mod tests {
         let a = e.evaluate(&Position::from_fen(orig).unwrap());
         let b = e.evaluate(&Position::from_fen(flip).unwrap());
         assert_eq!(a, b, "color-flip symmetry violated: {a} vs {b}");
+
+        // Step 5.0 battery test 3: a KING-ATTACK-asymmetric pair must also
+        // negate. A white knight on f5 touches the black king's ring (g7) with
+        // no other piece on the board; its rank-mirror is a black knight on f4
+        // touching the white king's ring (g2). The stm-relative scores are
+        // equal — the white-king-danger and black-king-danger contributions are
+        // exact negations of each other.
+        let ka_orig = "6k1/8/8/5N2/8/8/8/4K3 w - - 0 1";
+        let ka_flip = "4k3/8/8/8/5n2/8/8/6K1 b - - 0 1";
+        let ka = e.evaluate(&Position::from_fen(ka_orig).unwrap());
+        let kb = e.evaluate(&Position::from_fen(ka_flip).unwrap());
+        assert_eq!(
+            ka, kb,
+            "king-attack color-flip symmetry violated: {ka} vs {kb}"
+        );
+    }
+
+    // ---- Step 5.0: geometric battery for attack / king-safety sign
+    // conventions. These pin EXISTING semantics and must pass on the current
+    // code as well as the fused-pass refactor (that is the point of writing
+    // them first). KS_ATTACKER records carry the SUBJECT KING owner's sign
+    // (white king subject -> +1), i.e. the negation of the attacker's color.
+
+    /// Test 1: a white knight touching the BLACK king ring records
+    /// (KS_ATTACKER+0, sign -1) — the black king is the subject, so the sign
+    /// is the negation of the (white) attacker's loop sign. The record sign is
+    /// value-independent; eval directionality is checked by comparing against
+    /// the same FEN with the knight retreated out of range.
+    #[test]
+    fn white_knight_attacks_black_king_ring() {
+        // Black Kg8, white Nf5 (attacks g7, in the black king zone, not g8 so
+        // no check), white Ke1. White to move, legal, no side-effect check.
+        let fen = "6k1/8/8/5N2/8/8/8/4K3 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::Black), crate::board::Square::G8);
+        // Exactly one knight-slot attacker record with the black-king sign -1.
+        let recs = ks_records(fen, manifest::KS_ATTACKER, 4, -1);
+        assert_eq!(
+            recs,
+            vec![manifest::KS_ATTACKER],
+            "white knight on f5 touches the black king ring: one KS_ATTACKER+0, sign -1"
+        );
+        // No attacker record carries the WHITE-king sign (+1): the lone white
+        // knight is far from the white king and nothing attacks white's zone.
+        assert!(
+            ks_records(fen, manifest::KS_ATTACKER, 4, 1).is_empty(),
+            "no attacker touches the white king zone"
+        );
+        // Directionality: a knight bearing on Black's king is bad for Black, so
+        // the white-relative score is strictly higher than the retreated twin
+        // (knight on a1 attacks only b3/c2, nowhere near g8).
+        let retreated = "6k1/8/8/8/8/8/8/N3K3 w - - 0 1";
+        let in_range = evaluate_white_relative(&Position::from_fen(fen).unwrap());
+        let out = evaluate_white_relative(&Position::from_fen(retreated).unwrap());
+        assert!(
+            in_range > out,
+            "knight on the black king ring must help White: {in_range} vs retreated {out}"
+        );
+    }
+
+    /// Test 2: a black knight touching the WHITE king ring records
+    /// (KS_ATTACKER+0, sign +1); the eval for White is strictly worse than the
+    /// retreated-knight twin. Rank-mirror of test 1.
+    #[test]
+    fn black_knight_attacks_white_king_ring() {
+        // White Kg1, black Nf4 (attacks g2, in the white king zone, not g1 so
+        // no check), black Ke8. White to move, legal, no side-effect check.
+        let fen = "4k3/8/8/8/5n2/8/8/6K1 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::White), crate::board::Square::G1);
+        let recs = ks_records(fen, manifest::KS_ATTACKER, 4, 1);
+        assert_eq!(
+            recs,
+            vec![manifest::KS_ATTACKER],
+            "black knight on f4 touches the white king ring: one KS_ATTACKER+0, sign +1"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_ATTACKER, 4, -1).is_empty(),
+            "no attacker touches the black king zone"
+        );
+        // Directionality: a knight bearing on White's king is bad for White, so
+        // the white-relative score is strictly LOWER than the retreated twin.
+        let retreated = "n3k3/8/8/8/8/8/8/6K1 w - - 0 1";
+        let in_range = evaluate_white_relative(&Position::from_fen(fen).unwrap());
+        let out = evaluate_white_relative(&Position::from_fen(retreated).unwrap());
+        assert!(
+            in_range < out,
+            "knight on the white king ring must hurt White: {in_range} vs retreated {out}"
+        );
+    }
+
+    /// Test 4: a blocked slider does NOT reach the king zone. A white rook on
+    /// f2 bears up the f-file toward the black king on g8 (whose zone includes
+    /// f7/f8), but a black pawn on f5 interposes — the rook stops at f5 and
+    /// records NO KS_ATTACKER.
+    #[test]
+    fn blocked_rook_no_king_zone_attacker() {
+        // Black Kg8, Pf5 (blocker); white Rf2, Ke1. White to move, legal.
+        let fen = "6k1/8/8/5p2/8/8/5R2/4K3 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::Black), crate::board::Square::G8);
+        // No rook-slot attacker on the black king zone (the f5 pawn blocks).
+        let recs = ks_records(fen, manifest::KS_ATTACKER, 4, -1);
+        assert!(
+            recs.is_empty(),
+            "blocked rook must not touch the king zone, got {recs:?}"
+        );
+    }
+
+    /// Test 5: the same FEN minus the blocker — the rook now bears on f7/f8 in
+    /// the king zone and its KS_ATTACKER record (rook slot = 2, sign -1)
+    /// appears. (The rook is on the f-file and the king on g8, so the king is
+    /// NOT in check — a legal white-to-move position.)
+    #[test]
+    fn unblocked_rook_king_zone_attacker() {
+        // Black Kg8; white Rf2, Ke1 — no f5 blocker. White to move, legal.
+        let fen = "6k1/8/8/8/8/8/5R2/4K3 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::Black), crate::board::Square::G8);
+        let recs = ks_records(fen, manifest::KS_ATTACKER, 4, -1);
+        assert_eq!(
+            recs,
+            vec![manifest::KS_ATTACKER + 2],
+            "unblocked rook on the f-file touches the king zone: one KS_ATTACKER+2 (rook), sign -1"
+        );
+    }
+
+    /// Test 6: mobility exact counts are unchanged under the fused pass. Pins
+    /// the same two cases as the standalone mobility tests in one place:
+    /// startpos -> every knight records MOB_KNIGHT+2; a corner-trapped bishop
+    /// records MOB_BISHOP+0. (The bench-identity gate pins the rest globally.)
+    #[test]
+    fn mobility_counts_unchanged_under_fused_pass() {
+        let start = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let recs = records_in_table(start, manifest::MOB_KNIGHT, 9);
+        assert_eq!(recs.len(), 4, "four knights total, got {recs:?}");
+        for &(idx, _) in &recs {
+            assert_eq!(
+                idx,
+                manifest::MOB_KNIGHT + 2,
+                "every startpos knight has 2 safe squares; got idx {idx}"
+            );
+        }
+        let trapped = "2k5/8/8/8/8/8/1P6/B1K5 w - - 0 1";
+        let brecs = records_in_table(trapped, manifest::MOB_BISHOP, 14);
+        assert_eq!(
+            brecs,
+            vec![(manifest::MOB_BISHOP, 1i8)],
+            "trapped a1 bishop (pawn b2) has 0 safe squares -> exactly one MOB_BISHOP+0"
+        );
+    }
+
+    /// Test 7: shield record signs follow the KING OWNER, not any attacker. A
+    /// black king castled short (g8) with an intact f7/g7/h7 shield records
+    /// three (KS_SHIELD+0, sign -1) — the black-king sign — even though no
+    /// white piece is involved. (The white-side twin, `castled_king_full_shield`,
+    /// keeps passing as-is.)
+    #[test]
+    fn black_castled_king_shield_signs_follow_owner() {
+        // Black Kg8, Pf7,Pg7,Ph7; white Ka1 (its shield files a/b carry the +1
+        // sign, filtered out below). White to move, legal, no side-effect check.
+        let fen = "6k1/5ppp/8/8/8/8/8/K7 w - - 0 1";
+        let pos = Position::from_fen(fen).expect("test FEN must be legal");
+        assert_eq!(pos.king_sq(Color::Black), crate::board::Square::G8);
+        // Exactly three one-rank-ahead shield records for the BLACK king (-1).
+        let shield0 = ks_records(fen, manifest::KS_SHIELD, 1, -1);
+        assert_eq!(
+            shield0.len(),
+            3,
+            "Kg8 with f7/g7/h7: three shield-pawn-one-rank-ahead records, got {shield0:?}"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD + 1, 1, -1).is_empty(),
+            "no rel-rank-3 shield records for black"
+        );
+        assert!(
+            ks_records(fen, manifest::KS_SHIELD + 2, 1, -1).is_empty(),
+            "no missing-shield records for black"
+        );
     }
 
     // ---- Step 2.3: pawn hash transparency test ----
