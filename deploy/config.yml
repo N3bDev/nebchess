@@ -1,0 +1,49 @@
+# lichess-bot configuration for the NebChess UCI engine.
+# Trimmed from upstream config.yml.default (lichess-bot v1.1.3).
+#
+# The token is intentionally left BLANK: set the LICHESS_BOT_TOKEN environment
+# variable (e.g. a Railway service variable) and lichess-bot will use it,
+# overriding this field. Never commit a real token.
+token: ""
+url: "https://lichess.org/"
+
+engine:
+  dir: "./engines"          # directory containing the engine binary
+  name: "nebchess"          # binary filename in ./engines
+  protocol: "uci"           # NebChess speaks UCI
+  ponder: false             # single-threaded engine; pondering buys little
+  uci_options:
+    Hash: 256               # transposition table MB (engine allows 1-4096)
+    Move Overhead: 200      # ms; higher than the LAN default to absorb cloud RTT
+    Threads: 1              # NebChess is single-threaded (option is inert)
+
+# lichess-bot-side safety margins / timing.
+abort_time: 20              # seconds: abort a game if the opponent never moves
+rate_limiting_delay: 0
+move_overhead: 1000         # ms: extra clock safety on the bot side
+
+challenge:                  # which incoming challenges to auto-accept
+  concurrency: 1            # one game at a time (single-threaded engine)
+  accept_bot: true          # also accept challenges from other bots
+  only_bot: false
+  variants:
+    - standard              # NebChess plays standard chess only
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+    - classical
+  modes:
+    - casual
+    - rated
+  min_base: 60              # seconds: avoid hyperbullet the cloud RTT can't serve
+  max_base: 1800            # up to 30 min base
+  min_increment: 0
+  max_increment: 180
+
+matchmaking:
+  allow_matchmaking: false  # start purely reactive; flip to true to seek games
+
+greeting:
+  hello: "Hi! I'm NebChess, a from-scratch Rust engine. gl hf!"
+  goodbye: "Thanks for the game!"

@@ -1,0 +1,11 @@
+# Keep the Docker build context (repo root) small and fast. Only Cargo.*,
+# rust-toolchain.toml, src/, and deploy/ are needed by deploy/Dockerfile.
+target/
+.git/
+.github/
+docs/
+tools/
+tests/
+*.pgn
+*.log
+*.bin
