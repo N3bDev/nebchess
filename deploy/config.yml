@@ -34,8 +34,8 @@ challenge:                  # which incoming challenges to auto-accept
     - rapid
     - classical
   modes:
-    - casual
-    - rated
+    - rated                 # rated only: every game calibrates the bot's rating
+                            # (add "casual" back to also accept casual challenges)
   min_base: 60              # seconds: avoid hyperbullet the cloud RTT can't serve
   max_base: 1800            # up to 30 min base
   min_increment: 0
