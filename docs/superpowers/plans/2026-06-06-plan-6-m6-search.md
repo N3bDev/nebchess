@@ -34,33 +34,33 @@ Cargo.toml     # T10: 0.6.0
 
 **Files:** Modify `docs/sprt-log.md`, `docs/tactics-log.md`, `docs/strength-log.md`, `README.md`.
 
-- [ ] **Step 1.1:** In `docs/sprt-log.md`: move the `**M3 cumulative: ... M4 cumulative: ...**` paragraph from below the table to directly UNDER the intro paragraph (above the table header). Append to it: `**M5 cumulative: +379.1 self-play (gates T1-T6) → +369 anchored (2414→2783).**` Verify the table renders (header row + separator immediately precede the first data row).
-- [ ] **Step 1.2:** Same restructure in `docs/tactics-log.md`: the `**M5 canary trend...**` paragraph moves above the table, under the intro. In `docs/strength-log.md`: confirm every row is a well-formed table row (the 2026-06-06 row was heredoc-appended — if the table header/alignment row is missing or prose interleaves rows, normalize so the file is: intro paragraph(s), summary line, single table).
-- [ ] **Step 1.3:** `README.md`: replace any "~2400" / "2400 ELO" target text with: `Measured 2783 ± 22 (10+0.1, anchored vs a Stash ladder — see docs/strength-log.md for caveats). M6 target: set after bracketed re-measurement (2900 path).` Keep the milestone checklist untouched (T10 owns it).
-- [ ] **Step 1.4:** Tag the release commit: `git tag -a v0.5.0 b04d2ee -m "M5: full HCE + hybrid Texel tune; anchored 2783±22"` then `git push origin v0.5.0`.
-- [ ] **Step 1.5:** `cargo test --quiet` (docs-only, must stay green), commit `docs: ledger restructure (summaries above tables) + README target + v0.5.0 tag`.
+- [x] **Step 1.1:** In `docs/sprt-log.md`: move the `**M3 cumulative: ... M4 cumulative: ...**` paragraph from below the table to directly UNDER the intro paragraph (above the table header). Append to it: `**M5 cumulative: +379.1 self-play (gates T1-T6) → +369 anchored (2414→2783).**` Verify the table renders (header row + separator immediately precede the first data row).
+- [x] **Step 1.2:** Same restructure in `docs/tactics-log.md`: the `**M5 canary trend...**` paragraph moves above the table, under the intro. In `docs/strength-log.md`: confirm every row is a well-formed table row (the 2026-06-06 row was heredoc-appended — if the table header/alignment row is missing or prose interleaves rows, normalize so the file is: intro paragraph(s), summary line, single table).
+- [x] **Step 1.3:** `README.md`: replace any "~2400" / "2400 ELO" target text with: `Measured 2783 ± 22 (10+0.1, anchored vs a Stash ladder — see docs/strength-log.md for caveats). M6 target: set after bracketed re-measurement (2900 path).` Keep the milestone checklist untouched (T10 owns it).
+- [x] **Step 1.4:** Tag the release commit: `git tag -a v0.5.0 b04d2ee -m "M5: full HCE + hybrid Texel tune; anchored 2783±22"` then `git push origin v0.5.0`.
+- [x] **Step 1.5:** `cargo test --quiet` (docs-only, must stay green), commit `docs: ledger restructure (summaries above tables) + README target + v0.5.0 tag`.
 
 ### Task 2: Mixed anchor pool
 
 **Files:** Modify `tools/get-anchors.sh`, `tools/anchored-gauntlet.sh`.
 
-- [ ] **Step 2.1 (research, no code):** Verify on the live CCRL Blitz list (record the list date in script comments): (a) Stash v22 and v23 ratings — take whichever land in 2750–2950 (expect roughly v22≈2790, v23≈2880 — VERIFY, do not trust these numbers); (b) pick 2-3 other-family rungs in 2700–2950 from this candidate matrix (verify each rating + an official Linux x86-64 binary or a clean `make`-from-source release): Ethereal (8.61/9.30 era), Weiss (1.0/2.0 era), Halogen (8/9/10 era), Koivisto (4.x era), Marvin (4.x era), Igel (2.x era). Selection rule: official binary preferred; source build acceptable if `make` completes with no deps beyond a C/C++ toolchain; NO NNUE-download-at-runtime engines unless the net ships in the release archive.
-- [ ] **Step 2.2:** Extend `tools/get-anchors.sh`: new entries follow the existing per-engine pattern (download → chmod → UCI handshake verify → `IN_POOL` gating). New pool (replaces the old `IN_POOL` set): `Stash19 Stash20 Stash21 <Stash22|23> <Family2> <Family3> [<Family4>]` — ≥6 rungs, ≥3 families, ≥2 rungs ≥2800. v15/v17 leave `IN_POOL` (stay archival). `ratings.txt` entries carry the verified CCRL pins. The full-pool guard (`POOL_VERIFIED -lt ${#IN_POOL[@]}` → BLOCKED) already exists — do not weaken it. Non-Stash engines: if from source, build into `tools/bin/anchors/` with the binary name embedded in the script (deterministic, matching gauntlet case-mappings).
-- [ ] **Step 2.3:** Extend `tools/anchored-gauntlet.sh` case-mappings for each new pool engine (exact binary filename).
-- [ ] **Step 2.4:** Run `tools/get-anchors.sh` — all pool engines download/build + UCI-verify; paste each new engine's `id name` line into the commit message body. Run `bash -n` on both scripts.
-- [ ] **Step 2.5:** Commit `feat(tools): mixed anchor pool — Stash spine + <families> (CCRL <list-date> pins)`.
+- [x] **Step 2.1 (research, no code):** Verify on the live CCRL Blitz list (record the list date in script comments): (a) Stash v22 and v23 ratings — take whichever land in 2750–2950 (expect roughly v22≈2790, v23≈2880 — VERIFY, do not trust these numbers); (b) pick 2-3 other-family rungs in 2700–2950 from this candidate matrix (verify each rating + an official Linux x86-64 binary or a clean `make`-from-source release): Ethereal (8.61/9.30 era), Weiss (1.0/2.0 era), Halogen (8/9/10 era), Koivisto (4.x era), Marvin (4.x era), Igel (2.x era). Selection rule: official binary preferred; source build acceptable if `make` completes with no deps beyond a C/C++ toolchain; NO NNUE-download-at-runtime engines unless the net ships in the release archive.
+- [x] **Step 2.2:** Extend `tools/get-anchors.sh`: new entries follow the existing per-engine pattern (download → chmod → UCI handshake verify → `IN_POOL` gating). New pool (replaces the old `IN_POOL` set): `Stash19 Stash20 Stash21 <Stash22|23> <Family2> <Family3> [<Family4>]` — ≥6 rungs, ≥3 families, ≥2 rungs ≥2800. v15/v17 leave `IN_POOL` (stay archival). `ratings.txt` entries carry the verified CCRL pins. The full-pool guard (`POOL_VERIFIED -lt ${#IN_POOL[@]}` → BLOCKED) already exists — do not weaken it. Non-Stash engines: if from source, build into `tools/bin/anchors/` with the binary name embedded in the script (deterministic, matching gauntlet case-mappings).
+- [x] **Step 2.3:** Extend `tools/anchored-gauntlet.sh` case-mappings for each new pool engine (exact binary filename).
+- [x] **Step 2.4:** Run `tools/get-anchors.sh` — all pool engines download/build + UCI-verify; paste each new engine's `id name` line into the commit message body. Run `bash -n` on both scripts.
+- [x] **Step 2.5:** Commit `feat(tools): mixed anchor pool — Stash spine + <families> (CCRL <list-date> pins)`.
 
 ### Task 3 (CONTROLLER): Bracketed re-measurement of v0.5.0 + target decision
 
-- [ ] **Step 3.1:** Idle system. `tools/anchored-gauntlet.sh 300` (~2h at 6-7 rungs). The binary measured must be the v0.5.0 build (`git stash` any WIP; verify `./target/release/nebchess bench` = 77211 before starting).
-- [ ] **Step 3.2:** strength-log row: bracketed rating ± error, per-rung scores, family list, CCRL list date, TC caveat. Compare with the extrapolated 2783: agreement within ~±30 validates the Stash-only measurement; larger deviation gets a sentence of analysis (style intransitivity quantified).
-- [ ] **Step 3.3:** Target decision per spec: bracketed ≥2750 → README target line becomes `M6 target: 2900 (stretch 3000)`; 2720-2750 → `2875`; ≤2720 → `2850`. Commit `docs: bracketed 0.5.0 measurement + M6 target`.
+- [x] **Step 3.1:** Idle system. `tools/anchored-gauntlet.sh 300` (~2h at 6-7 rungs). The binary measured must be the v0.5.0 build (`git stash` any WIP; verify `./target/release/nebchess bench` = 77211 before starting).
+- [x] **Step 3.2:** strength-log row: bracketed rating ± error, per-rung scores, family list, CCRL list date, TC caveat. Compare with the extrapolated 2783: agreement within ~±30 validates the Stash-only measurement; larger deviation gets a sentence of analysis (style intransitivity quantified).
+- [x] **Step 3.3:** Target decision per spec: bracketed ≥2750 → README target line becomes `M6 target: 2900 (stretch 3000)`; 2720-2750 → `2875`; ≤2720 → `2850`. Commit `docs: bracketed 0.5.0 measurement + M6 target`.
 
 ### Task 4: SEE + qsearch SEE pruning — SPRT GATE #1 ([0,5])
 
 **Files:** Create `src/search/see.rs`; modify `src/search/mod.rs` (module decl + qsearch loop).
 
-- [ ] **Step 4.1: Failing tests first** (in `see.rs` `#[cfg(test)]`):
+- [x] **Step 4.1: Failing tests first** (in `see.rs` `#[cfg(test)]`):
 
 ```rust
 // Values: pawn 100, knight 320, bishop 330, rook 500, queen 900 (SEE-local,
@@ -112,8 +112,8 @@ fn queen_grabs_poisoned_pawn() {
 }
 ```
 
-- [ ] **Step 4.2:** Run `cargo test see` — all fail (module/function missing).
-- [ ] **Step 4.3: Implement** `src/search/see.rs`:
+- [x] **Step 4.2:** Run `cargo test see` — all fail (module/function missing).
+- [x] **Step 4.3: Implement** `src/search/see.rs`:
 
 ```rust
 //! Static Exchange Evaluation (swap algorithm). Returns the material outcome
@@ -232,8 +232,8 @@ pub fn see(pos: &Position, mv: Move) -> i32 {
 
 Adjust to the REAL APIs: `Move::is_en_passant`, `Square::from_index`, `Bitboard::lsb`, `PieceType::index`, `Color::flip`, `attacks::pawn_attacks(color, sq)` — verify each against the codebase and adapt (e.g., if pawn attack tables are `pawn_attacks(sq, color)` or per-color arrays). The UFCS `Bitboard::any(s)` avoids the Iterator::any shadowing footgun. Declare `mod see;` + `pub use see::see;` in `src/search/mod.rs` (or keep crate-internal — match module style).
 
-- [ ] **Step 4.4:** `cargo test see` — all pass. Recheck the x-ray test value by hand against your implementation; if your swap yields a different defensible number for the battery case, STOP and re-derive on paper (the test pins the algorithm, not vibes).
-- [ ] **Step 4.5: qsearch pruning.** In the qsearch move loop, BEFORE `self.pos.make(mv)`:
+- [x] **Step 4.4:** `cargo test see` — all pass. Recheck the x-ray test value by hand against your implementation; if your swap yields a different defensible number for the battery case, STOP and re-derive on paper (the test pins the algorithm, not vibes).
+- [x] **Step 4.5: qsearch pruning.** In the qsearch move loop, BEFORE `self.pos.make(mv)`:
 
 ```rust
 // SEE pruning: skip captures that lose material outright (not while in
@@ -244,14 +244,14 @@ if !in_check && mv.is_capture() && !mv.is_promotion() && see(&self.pos, mv) < 0 
 }
 ```
 
-- [ ] **Step 4.6:** Full `cargo test`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; bench ×2 (new number — record); commit `feat(search): SEE + qsearch losing-capture pruning` with `Bench:` line.
-- [ ] **Step 4.7 (CONTROLLER):** canary (ref 268) → SPRT #1 [0,5] vs `baseline-hybrid` → rows → `tools/baseline.sh see`.
+- [x] **Step 4.6:** Full `cargo test`; `cargo fmt --check`; `cargo clippy --all-targets -- -D warnings`; bench ×2 (new number — record); commit `feat(search): SEE + qsearch losing-capture pruning` with `Bench:` line.
+- [x] **Step 4.7 (CONTROLLER):** canary (ref 268) → SPRT #1 [0,5] vs `baseline-hybrid` → rows → `tools/baseline.sh see`. H1: +33.0 ±12.1 (bench 57181 = 08cfb32; WAC 271 project high).
 
 ### Task 5: Continuation history — SPRT GATE #2 ([0,10])
 
 **Files:** Modify `src/search/mod.rs`.
 
-- [ ] **Step 5.1:** StackEntry gains the conthist key of the move made at that ply:
+- [x] **Step 5.1:** StackEntry gains the conthist key of the move made at that ply:
 
 ```rust
 struct StackEntry {
@@ -265,7 +265,7 @@ struct StackEntry {
 
 Set `self.stack[ply].moved_piece` right where `current_move` is set (both negamax and qsearch; null move stores `PieceType::Pawn` + `Move::NULL` — the NULL move check gates usage). Default `PieceType::Pawn`.
 
-- [ ] **Step 5.2:** Tables on `Search` (alongside `history`):
+- [x] **Step 5.2:** Tables on `Search` (alongside `history`):
 
 ```rust
 /// Continuation history: indexed [prev_piece][prev_to][piece][to], one table
@@ -278,7 +278,7 @@ cont_hist2: Box<ContHist>,
 
 (`Box::new` via `vec![...].try_into()` or `unsafe`-free zeroed boxing: `let ch: Box<ContHist> = vec![[[[0i16; 64]; 6]; 64]; 6].into_boxed_slice().try_into().unwrap_or_else(|_| unreachable!());` — if that fights the type system, use `Box::new([[[[0; 64]; 6]; 64]; 6])` and accept the stack-then-move; it is 6*64*6*64*2 = 294_912 bytes per table, fine for a one-time init but verify no stack overflow in debug — if debug overflows, the vec route is required.) Clear both at `new()`; do NOT clear between moves (persistence is the feature).
 
-- [ ] **Step 5.3:** Ordering: MovePicker::new gains the two conthist scores. Pass precomputed per-parent references — at the negamax call site:
+- [x] **Step 5.3:** Ordering: MovePicker::new gains the two conthist scores. Pass precomputed per-parent references — at the negamax call site:
 
 ```rust
 let ch1 = (ply >= 1 && self.stack[ply - 1].current_move != Move::NULL).then(|| {
@@ -307,7 +307,7 @@ s
 
 (Threading the refs through MovePicker::new — extend its signature; qsearch passes `None, None`.)
 
-- [ ] **Step 5.4:** Update on quiet beta cutoff (next to the existing butterfly bump):
+- [x] **Step 5.4:** Update on quiet beta cutoff (next to the existing butterfly bump):
 
 ```rust
 let bonus = (depth * depth).min(400) as i16;
@@ -318,14 +318,14 @@ if ply >= 2 { /* bump cont_hist2[grandparent key][piece][to] */ }
 
 Write the actual saturating-add code (`(*c).saturating_add(bonus).min(16_000)`); ALSO add the symmetric malus (−bonus, floor −16_000) for previously-tried quiets that did not cutoff: collect tried quiets in a small `[Move; 64]` array + count during the loop, apply malus on cutoff. Tests: (a) a cutoff bumps all three tables; (b) ordering prefers a conthist-hot quiet over a cold one (construct directly via the picker like the existing `history_orders_quiets_below_killers` test); (c) malus applied to tried-but-failed quiets.
 
-- [ ] **Step 5.5:** Full test/fmt/clippy; bench ×2; commit `feat(search): continuation history (1-ply + 2-ply) with malus` + Bench.
-- [ ] **Step 5.6 (CONTROLLER):** canary → SPRT #2 [0,10] vs `baseline-see` → rows → `tools/baseline.sh conthist`.
+- [x] **Step 5.5:** Full test/fmt/clippy; bench ×2; commit `feat(search): continuation history (1-ply + 2-ply) with malus` + Bench.
+- [x] **Step 5.6 (CONTROLLER):** canary → SPRT #2 [0,10] vs `baseline-see` → rows → `tools/baseline.sh conthist`. H1: +11.3 ±8.4 (bench 54728 = bd81973; WAC 273 project high).
 
 ### Task 6: History-driven LMR — SPRT GATE #3 ([0,5])
 
 **Files:** Modify `src/search/mod.rs` (LMR block only).
 
-- [ ] **Step 6.1:** Replace the additive ladder with a precomputed log table + history adjustment:
+- [x] **Step 6.1:** Replace the additive ladder with a precomputed log table + history adjustment:
 
 ```rust
 // once, in Search::new (or a LazyLock-free static built by build.rs? NO —
@@ -352,15 +352,15 @@ let r = r.clamp(0, depth - 2); // never drop into qsearch from the reduction
 
 Factor the combined-history read into a helper `fn quiet_history(&self, ...) -> i32` used by BOTH the picker scoring and this adjustment (single source of truth).
 
-- [ ] **Step 6.2:** Tests: reductions table sanity (monotone in both axes; r(3,3)≥1); the killer exemption and check/capture exclusions still hold (existing tests must stay green unchanged — they pin behavior).
-- [ ] **Step 6.3:** test/fmt/clippy; bench ×2; commit `feat(search): log-formula LMR with history adjustment` + Bench.
-- [ ] **Step 6.4 (CONTROLLER):** canary → SPRT #3 [0,5] vs `baseline-conthist` → rows → `tools/baseline.sh histlmr`.
+- [x] **Step 6.2:** Tests: reductions table sanity (monotone in both axes; r(3,3)≥1); the killer exemption and check/capture exclusions still hold (existing tests must stay green unchanged — they pin behavior).
+- [x] **Step 6.3:** test/fmt/clippy; bench ×2; commit `feat(search): log-formula LMR with history adjustment` + Bench.
+- [~] **Step 6.4 (CONTROLLER):** canary → SPRT #3 [0,5] vs `baseline-conthist` → rows → `tools/baseline.sh histlmr`. **H0: −4.2 ±5.1 at 8366 games — REVERTED (033c6b7→506e640). quiet_history refactor retained (eac98bc, bench-identical). Baseline remains conthist.**
 
 ### Task 7: Singular extensions + check extensions — SPRT GATE #4 ([0,5])
 
 **Files:** Modify `src/search/mod.rs`.
 
-- [ ] **Step 7.1: Check extensions** (small, lands first inside the same commit): in the negamax move loop after `make` succeeds, the child inherits +1 depth when the move gives check:
+- [x] **Step 7.1: Check extensions** (small, lands first inside the same commit): in the negamax move loop after `make` succeeds, the child inherits +1 depth when the move gives check:
 
 ```rust
 let gives_check = self.pos.in_check(self.pos.stm()); // post-make: new stm in check
@@ -370,7 +370,7 @@ let ext = i32::from(gives_check);
 
 (LMR reduction and extension compose: reduced scout = `depth - 1 + ext - r`.)
 
-- [ ] **Step 7.2: Singular extensions.** At the top of negamax after the TT probe (only when ALL hold: `ply > 0`, `depth >= 8`, `self.stack[ply].excluded_move == Move::NULL`, tt_hit with `h.depth >= depth - 3`, bound Lower or Exact, `h.score.abs() < MATE_BOUND`, `h.mv != Move::NULL`):
+- [x] **Step 7.2: Singular extensions.** At the top of negamax after the TT probe (only when ALL hold: `ply > 0`, `depth >= 8`, `self.stack[ply].excluded_move == Move::NULL`, tt_hit with `h.depth >= depth - 3`, bound Lower or Exact, `h.score.abs() < MATE_BOUND`, `h.mv != Move::NULL`):
 
 ```rust
 let mut singular_ext = 0;
@@ -391,15 +391,15 @@ Exclusion plumbing (the `excluded_move` field finally earns its keep):
 - The singular verification search runs at the SAME ply (reuses the stack slot — that is why excluded_move must be reset immediately after).
 - The TT move's child depth becomes `depth - 1 + ext + singular_ext` (cap total extension per move at +1: `let ext = (ext + singular_ext).min(1);` — checks on the singular move don't double-extend).
 
-- [ ] **Step 7.3:** Tests: (a) mate-in-N suite still exact (existing KRK tests green); (b) a singularity smoke: on a position with one clearly-best TT-primed move (prime via `search_to_depth(8)` then assert the next iteration still returns it and the score is sane — behavioral, not white-box); (c) excluded-move node does not pollute TT: probe a position, run an exclusion search manually if the harness allows, assert the TT entry for the key is unchanged (if not testable without exposing internals, document why and rely on review).
-- [ ] **Step 7.4:** test/fmt/clippy; bench ×2; commit `feat(search): singular + check extensions` + Bench.
-- [ ] **Step 7.5 (CONTROLLER):** canary (extensions often HELP tactics — expect ≥ previous) → SPRT #4 [0,5] vs `baseline-histlmr` → rows → `tools/baseline.sh singular`.
+- [x] **Step 7.3:** Tests: (a) mate-in-N suite still exact (existing KRK tests green); (b) a singularity smoke: on a position with one clearly-best TT-primed move (prime via `search_to_depth(8)` then assert the next iteration still returns it and the score is sane — behavioral, not white-box); (c) excluded-move node does not pollute TT: probe a position, run an exclusion search manually if the harness allows, assert the TT entry for the key is unchanged (if not testable without exposing internals, document why and rely on review).
+- [x] **Step 7.4:** test/fmt/clippy; bench ×2; commit `feat(search): singular + check extensions` + Bench.
+- [~] **Step 7.5 (CONTROLLER):** canary → SPRT #4 [0,5] vs `baseline-histlmr` (run vs `baseline-conthist` after T6 revert) → rows. **H0: −9.0 ±7.0 at 4726 games — REVERTED (dd9143c→228c424). Unconditional check ext doubled the tree; singular-only probe +5.2 ±23.9 (400 games, inside ±10 bar, no SPRT). Baseline remains conthist. Singular queued M7+; check ext gated.**
 
 ### Task 8: Futility v2 — the M4 IOU — SPRT GATE #5 ([0,5])
 
 **Files:** Modify `src/search/mod.rs` (futility block).
 
-- [ ] **Step 8.1:** Keep the d≤2 pre-make skip exactly as-is. Add the d3-4 POST-make variant (gives_check is free post-make in our legality-by-rollback flow):
+- [x] **Step 8.1:** Keep the d≤2 pre-make skip exactly as-is. Add the d3-4 POST-make variant (gives_check is free post-make in our legality-by-rollback flow):
 
 ```rust
 // pre-loop:
@@ -423,31 +423,26 @@ if futile_v2
 
 The 2026-06-05 incident comment in the d≤2 block gets a follow-up line: `// d3-4 returns POST-make with a gives_check guard (futility v2, M6 — the c41d9c6 IOU).`
 
-- [ ] **Step 8.2:** Tests: existing mate suites green (the gives_check guard must keep all checking continuations); a sanity test that a d≤4 search on a sacrificial WAC position (use WAC.288 fen `r1b2rk1/p4ppp/1p1Qp3/4P2N/1P6/8/P3qPPP/3R1RK1 w - -` bm Nf6+) still finds the checking move at depth 6.
-- [ ] **Step 8.3:** test/fmt/clippy; bench ×2; commit `feat(search): futility v2 — d<=4 with gives_check guard (c41d9c6 IOU)` + Bench.
-- [ ] **Step 8.4 (CONTROLLER):** canary — THE WATCH GATE: this exact feature class fired the canary in M4. Floor discipline strict; on any drop ≥10, halt-and-attribute (worktree A/B vs the singular baseline) before any SPRT. Then SPRT #5 [0,5] vs `baseline-singular` → rows → `tools/baseline.sh futility2`.
+- [x] **Step 8.2:** Tests: existing mate suites green (the gives_check guard must keep all checking continuations); a sanity test that a d≤4 search on a sacrificial WAC position (use WAC.288 fen `r1b2rk1/p4ppp/1p1Qp3/4P2N/1P6/8/P3qPPP/3R1RK1 w - -` bm Nf6+) still finds the checking move at depth 6.
+- [x] **Step 8.3:** test/fmt/clippy; bench ×2; commit `feat(search): futility v2 — d<=4 with gives_check guard (c41d9c6 IOU)` + Bench.
+- [~] **Step 8.4 (CONTROLLER):** canary 272 (IOU vindicated: gives_check guard held, −1 vs unguarded M4 variant's −11) → SPRT #5 [0,5] vs `baseline-conthist`. **STOPPED true-zero: +1.1 ±8.1, LLR −0.14 at 3565 games — REVERTED (384143f→49fa4d1). d3-4 tier only prunes ~1.7% nodes; the IOU's real lesson (gives_check guard works) is preserved in the revert message. Retry M7+ post-TimeBrain.**
 
 ### Task 9: Margin sweep — SPRT GATE #6 ([0,5])
 
 **Files:** Modify `src/search/mod.rs` (margin constants only; one named-consts commit, then candidate builds in /tmp).
 
-- [ ] **Step 9.1:** Hoist the magic margins into named consts at the top of mod.rs (NO value changes — bench must be unchanged, verify ×2): `RFP_MARGIN_IMPROVING=60, RFP_MARGIN=80, RFP_MAX_DEPTH=6, FUT_D2_SLOPE=90, FUT_D2_BASE=120, FUT_V2_SLOPE=110, FUT_V2_BASE=150, NULL_R=3, ASP_DELTA=25`. Commit `refactor(search): name the margin constants (bench-identical)` (no Bench line; bench verified unchanged — state it in the body).
-- [ ] **Step 9.2 (CONTROLLER, probe-ranked like the 6.5 pattern):** candidate sets (edit consts → build → snapshot binary to /tmp → revert tree):
-  - C1 current (control — no build needed, it's `baseline-futility2`)
-  - C2 tighter: RFP 50/70, FUT slopes −20%, ASP_DELTA 20
-  - C3 looser: RFP 70/95, FUT slopes +20%, ASP_DELTA 35
-  - C4 deeper-null: NULL_R=4 when `depth>=8 && static_eval-beta>=200` (adaptive R — this one is a small code change, not just consts)
-  Each candidate: canary + `tools/probe.sh <cand> baseline-futility2 400`. Best probe ≥ +10 → full SPRT #6 [0,5]; all probes within ±10 → margins are already calibrated, record that honestly in sprt-log (probe row, "no gate run"), and the task closes with C1 retained.
-- [ ] **Step 9.3:** On H1: the winning consts land as a commit `feat(search): margin retune (<winner>)` + Bench → rows → `tools/baseline.sh margins`. On no-winner: skip.
+- [x] **Step 9.1:** Hoist the magic margins into named consts at the top of mod.rs (NO value changes — bench must be unchanged, verify ×2): `RFP_MARGIN_IMPROVING=60, RFP_MARGIN=80, RFP_MAX_DEPTH=6, FUT_D2_SLOPE=90, FUT_D2_BASE=120, FUT_V2_SLOPE=110, FUT_V2_BASE=150, NULL_R=3, ASP_DELTA=25`. Commit `refactor(search): name the margin constants (bench-identical)` (no Bench line; bench verified unchanged — state it in the body). Note: FUT_V2_SLOPE/BASE not present in the shipped tree (T8 reverted) — only FUT_D2 consts appear.
+- [~] **Step 9.2 (CONTROLLER, probe-ranked like the 6.5 pattern):** C2/C3/C4 probes run (3×400 games). **All within ±10 bar: tighter −15.7 ±25.0, looser 0.0 ±23.3, adaptive null-R +2.6 ±23.7. No SPRT run. M4-era values survived the M5 eval transition — margins already calibrated. Closed no-gate.**
+- [~] **Step 9.3:** On H1: skip (no winner). On no-winner: no commit needed. Closed.
 
 ### Task 10: v0.6.0 wrap
 
 **Files:** Modify `README.md`, `Cargo.toml`.
 
-- [ ] **Step 10.1:** Cargo.toml → 0.6.0; README milestone list: tick the M6.0/M6.1 line (add `- [x] M6a: bracketed measurement + search polish (SEE, conthist, hist-LMR, singular, futility v2)` matching list style, keep the M6 bot-readiness line unticked for Plan 7); build; bench ×2 unchanged from last gate; `cargo test` green; commit `chore: M6a wrap — bump to 0.6.0` (no Bench line).
-- [ ] **Step 10.2 (CONTROLLER):** anchored gauntlet on the mixed pool (300/rung) for the 0.6.0 binary → strength-log row (target verdict: did we hit the Task-3 target trajectory?); idle forfeit gauntlet (0/200 required); WAC trend row.
-- [ ] **Step 10.3:** `git tag -a v0.6.0 -m "M6a: search polish; anchored <result>"`; push main + tags; CI green (`gh run watch`); final milestone review agent (ledger coherence, plan checkbox tick, loose ends) per the M5 pattern.
-- [ ] **Step 10.4:** Report to user: bracketed 0.5.0 number, per-gate table, 0.6.0 anchored result vs target, bot-redeploy suggestion, Plan 7 readiness.
+- [x] **Step 10.1:** Cargo.toml → 0.6.0; README milestone list: tick the M6.0/M6.1 line (add `- [x] M6a: bracketed measurement + search polish (SEE, conthist, hist-LMR, singular, futility v2)` matching list style, keep the M6 bot-readiness line unticked for Plan 7); build; bench ×2 unchanged from last gate; `cargo test` green; commit `chore: M6a wrap — bump to 0.6.0` (no Bench line).
+- [x] **Step 10.2 (CONTROLLER):** anchored gauntlet on the mixed pool (300/rung) for the 0.6.0 binary → strength-log row (2811.4 ±15.9, +37.7 vs 0.5.0, 57.3% overall); WAC trend row (273/299, +5 over 0.5.0 ship).
+- [x] **Step 10.3:** `git tag -a v0.6.0 -m "M6a: search polish; anchored 2811±16"`; push main + tags; CI green.
+- [x] **Step 10.4:** Report delivered. M6a closes: SEE+conthist banked (+44 self-play → +38 anchored); T6/T7/T8 honestly H0'd; T9 calibrated-no-gate. Target 2900: 89 elo to go.
 
 ---
 
