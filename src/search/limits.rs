@@ -57,6 +57,11 @@ pub struct TimeManager {
     start: Instant,
     soft: Option<Duration>, // base soft (post-catch-up, pre-trend-scaling)
     hard: Option<Duration>,
+    // `go movetime N` is a UCI EXACT-budget contract: the search must spend ~N
+    // ms regardless of stability/won-fast/panic. True ONLY for the movetime
+    // branch (where soft==hard); when set, `effective_soft_ms` returns the base
+    // soft UNSCALED so trend-scaling cannot shrink (or grow) the budget.
+    exact: bool,
     // Gate-1 stability state:
     last_best: u16,      // caller-supplied move key (Move's raw bits)
     stable_iters: u32,   // consecutive iterations with the same best move
@@ -79,6 +84,8 @@ impl TimeManager {
         opp_time: Option<u64>,
     ) -> TimeManager {
         let start = Instant::now();
+        // movetime is the only EXACT-budget path (soft==hard, no trend-scaling).
+        let exact = !limits.infinite && limits.movetime.is_some();
         let (soft, hard) = if limits.infinite {
             (None, None)
         } else if let Some(mt) = limits.movetime {
@@ -127,6 +134,7 @@ impl TimeManager {
             start,
             soft: soft.map(Duration::from_millis),
             hard: hard.map(Duration::from_millis),
+            exact,
             last_best: 0,
             stable_iters: 0,
             soft_scale_pct: 100,
@@ -191,8 +199,16 @@ impl TimeManager {
     /// blitzing the move out instantly; the `hard` cap keeps an extension
     /// (change-extend or panic) from outrunning the absolute one-move ceiling.
     /// Floor is applied before the cap so the result is ALWAYS `<= hard`.
+    ///
+    /// EXACT budgets (`go movetime N`) are exempt: trend-scaling is the +26-elo
+    /// wtime/btime feature, but movetime is a fixed UCI contract — return the
+    /// base soft UNSCALED (the floor/cap are moot since soft==hard). This is the
+    /// single choke point; `report_iteration` may still run harmlessly.
     pub fn effective_soft_ms(&self) -> Option<u64> {
         let soft = self.soft?.as_millis() as u64;
+        if self.exact {
+            return Some(soft);
+        }
         let scaled = (soft * u64::from(self.soft_scale_pct) / 100).max(soft / 4);
         let capped = match self.hard {
             Some(h) => scaled.min(h.as_millis() as u64),
@@ -244,6 +260,29 @@ mod tests {
         let (soft, hard) = tm.budgets_ms();
         assert_eq!(soft, Some(490));
         assert_eq!(hard, Some(490));
+    }
+
+    #[test]
+    fn movetime_is_exact_under_won_stable() {
+        // movetime is a UCI EXACT-budget contract: a won + stable position must
+        // NOT trigger won-fast (50%) scaling on the movetime budget. Regression
+        // for `go movetime 2000` stopping at ~550ms on a won, settled position.
+        let l = Limits {
+            movetime: Some(2_000),
+            ..Limits::default()
+        };
+        let mut tm = TimeManager::new(&l, Color::White, 0, None);
+        let soft = tm.budgets_ms().0.unwrap();
+        // Won + settled PV across 4 iterations (stable_iters >= 3 + score >= 500
+        // would scale to 50% on a wtime search via won-fast).
+        for d in 7..=10 {
+            tm.report_iteration(d, 800, 1 /*same move key*/);
+        }
+        assert_eq!(
+            tm.effective_soft_ms(),
+            Some(soft),
+            "movetime is exact: full budget, NOT scaled to 50% by won-fast"
+        );
     }
 
     #[test]
