@@ -25,3 +25,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-06 | full joint tune on big3 7.15M @ b030465 | 269/299 | **+2 — NEW PROJECT HIGH**: review flagged deflated material vs fixed-cp margins as the risk (rook/queen sac motifs) — did not materialize; the bigger corpus sharpened tactical judgment |
 | 2026-06-06 | hybrid zurichess+big3 tune @ HEAD | 268/299 | top of band — half-distortion costs nothing tactically; hybrid ships after H1 |
 | 2026-06-07 | SEE + qsearch pruning @ 08cfb32 | 271/299 | **+3 — NEW PROJECT HIGH**: ~26% node cut buys depth; sound sacs unaffected (checks bypass the SEE gate); WAC.288 verified in review |
+| 2026-06-07 | continuation history @ bd81973 | 273/299 | **+2 — project high again**: ordering gains compound with SEE depth; note: tables persist per-go only (SearchThread recreated per search — cross-move persistence is the Plan 7 conthist refactor) |
