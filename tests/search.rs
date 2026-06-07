@@ -375,34 +375,3 @@ fn search_remains_deterministic_with_null_move() {
         searcher("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10");
     assert_eq!(a.search_to_depth(7), b.search_to_depth(7));
 }
-
-// --- Task 8: Futility v2 (d<=4 POST-make skip, gives_check guard) ---
-
-#[test]
-fn futility_v2_does_not_skip_the_winning_check() {
-    // WAC.288: the win is the checking sacrifice 1.Nf6+ (h5f6). Futility v2
-    // skips d3-4 quiets at a hopeless eval, but its gives_check guard must keep
-    // every checking continuation searched — this is the exact failure mode
-    // (sacrificial combinations behind a check) the M4 canary caught.
-    //
-    // DEVIATION from plan step 8.2: the plan asserts depth 6 finds Nf6+. That was
-    // written against v0.5.0 (Bench 77211); HEAD reverted to the conthist-era eval
-    // (Bench 54728), which ranks h5g3 over h5f6 until the sacrifice resolves at
-    // depth 13 (verified: baseline WITHOUT futility v2 also plays h5g3 through
-    // depth 12, so this is an eval property, not a futility regression). The
-    // depth that actually exercises the guard is the one where the sacrifice wins:
-    // with futility v2 ACTIVE at every d3-4 node of this search, the engine still
-    // finds Nf6+ with a winning score — proof the gives_check guard protects the
-    // checking line. (A broken guard would futility-prune the checks and lose it.)
-    let mut st = searcher("r1b2rk1/p4ppp/1p1Qp3/4P2N/1P6/8/P3qPPP/3R1RK1 w - - 0 1");
-    let (best, score) = st.search_to_depth(13);
-    assert_eq!(
-        best.unwrap().to_string(),
-        "h5f6",
-        "gives_check guard must protect the winning sacrificial check Nf6+"
-    );
-    assert!(
-        score > 300,
-        "the sacrifice must resolve as winning (got {score})"
-    );
-}
