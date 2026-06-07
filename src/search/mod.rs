@@ -275,24 +275,10 @@ pub struct SearchThread<E: Evaluator> {
     history: Box<HistoryTable>,
     cont_hist1: Box<ContHist>,
     cont_hist2: Box<ContHist>,
-    /// Precomputed LMR base reductions: `reductions[depth][move_index]` =
-    /// `(0.77 + ln(depth)·ln(move_index) / 2.36)` truncated to `i32`, for
-    /// `depth, move_index` in `1..64`. Row/col 0 stay 0 (never indexed: the
-    /// LMR guards require `depth >= 3` and `quiet_count >= 3`). Built once in
-    /// [`SearchThread::new`]; indices are clamped to 63 at the call site.
-    reductions: Box<[[i32; 64]; 64]>,
 }
 
 impl<E: Evaluator> SearchThread<E> {
     pub fn new(pos: Position, eval: E) -> SearchThread<E> {
-        // Log-formula LMR base reductions, computed once: deeper searches and
-        // later moves reduce more (both axes monotone non-decreasing).
-        let mut reductions = Box::new([[0i32; 64]; 64]);
-        for d in 1..64 {
-            for m in 1..64 {
-                reductions[d][m] = (0.77 + (d as f64).ln() * (m as f64).ln() / 2.36) as i32;
-            }
-        }
         SearchThread {
             pos,
             eval,
@@ -308,7 +294,6 @@ impl<E: Evaluator> SearchThread<E> {
             history: Box::new([[[0; 64]; 64]; 2]),
             cont_hist1: zeroed_cont_hist(),
             cont_hist2: zeroed_cont_hist(),
-            reductions,
         }
     }
 
@@ -581,27 +566,7 @@ impl<E: Evaluator> SearchThread<E> {
                     quiet_count += 1;
                     let is_killer = mv == killers[0] || mv == killers[1];
                     if depth >= 3 && quiet_count >= 3 && !is_killer {
-                        // base reduction from the log-formula table
-                        r = self.reductions[(depth.min(63)) as usize]
-                            [(quiet_count.min(63)) as usize];
-                        // history adjustment: hot quiets reduce less, cold reduce
-                        // more. Reads the SAME combined score the picker ordered
-                        // by (via the shared `quiet_history` helper).
-                        let hist = quiet_history(
-                            &self.history,
-                            &self.cont_hist1,
-                            &self.cont_hist2,
-                            ch1,
-                            ch2,
-                            stm,
-                            moved_piece,
-                            mv.from(),
-                            mv.to(),
-                        );
-                        r -= (hist / 8_000).clamp(-2, 2);
-                        // never reduce into qsearch (depth >= 3 here, so the
-                        // upper bound is >= 1 and r can't go negative)
-                        r = r.clamp(0, depth - 2);
+                        r = 1 + i32::from(quiet_count >= 8) + i32::from(depth >= 8);
                     }
                 }
                 let mut zw = -self.negamax(depth - 1 - r, -alpha - 1, -alpha, ply + 1);
@@ -1180,47 +1145,5 @@ mod tests {
             c2 < 0,
             "cont_hist2 malus on tried-but-failed quiet (got {c2})"
         );
-    }
-
-    #[test]
-    fn lmr_reductions_table_is_sane() {
-        // The log-formula table is built in `new()`; any evaluator works.
-        let pos = Position::from_fen("7k/8/8/8/8/8/4P3/4K3 w - - 0 1").unwrap();
-        let st = SearchThread::new(pos, PawnE4Eval);
-        let r = &st.reductions;
-
-        // explicit floor: a depth-3, 3rd-quiet reduction is at least 1 ply
-        assert!(r[3][3] >= 1, "r[3][3] must be >= 1 (got {})", r[3][3]);
-        // pinned corner values (log formula, truncated) — for the record
-        assert_eq!(r[3][3], 1);
-        assert_eq!(r[8][8], 2);
-        assert_eq!(r[20][30], 5);
-        assert_eq!(r[63][63], 8);
-
-        // monotone non-decreasing along BOTH axes over the live range (1..64):
-        // ln is increasing and the coefficient is positive, so deeper / later
-        // never reduces less. Truncation to i32 preserves the ordering.
-        for d in 1..64 {
-            for m in 2..64 {
-                assert!(
-                    r[d][m] >= r[d][m - 1],
-                    "non-monotone in move-index at d={d}: r[{d}][{m}]={} < r[{d}][{}]={}",
-                    r[d][m],
-                    m - 1,
-                    r[d][m - 1],
-                );
-            }
-        }
-        for m in 1..64 {
-            for d in 2..64 {
-                assert!(
-                    r[d][m] >= r[d - 1][m],
-                    "non-monotone in depth at m={m}: r[{d}][{m}]={} < r[{}][{m}]={}",
-                    r[d][m],
-                    d - 1,
-                    r[d - 1][m],
-                );
-            }
-        }
     }
 }
