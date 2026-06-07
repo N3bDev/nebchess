@@ -8,12 +8,17 @@ use std::thread::JoinHandle;
 
 use crate::board::movegen::find_uci_move;
 use crate::board::Position;
+use crate::book::Book;
 use crate::eval::Hce;
 use crate::search::limits::Limits;
 use crate::search::tt::Tt;
 use crate::search::{IterInfo, SearchThread, MATE, MATE_BOUND};
 
 pub const NAME: &str = concat!("NebChess ", env!("CARGO_PKG_VERSION"));
+
+/// Default book cutoff in plies (`BookDepth`): book moves are consulted only
+/// while the game ply is below this.
+const DEFAULT_BOOK_DEPTH: u32 = 16;
 
 pub fn run() {
     Uci::new().main_loop();
@@ -25,6 +30,13 @@ struct Uci {
     search: Option<JoinHandle<()>>,
     overhead_ms: u64,
     tt: Arc<Tt>,
+    /// Loaded PolyGlot opening book (`BookFile`); `None` = off.
+    book: Option<Book>,
+    /// Plies the book will answer before handing off to search (`BookDepth`).
+    book_depth: u32,
+    /// Plies played into the current game (from the `position` command's move
+    /// list). Used as the book cutoff and to vary the per-game RNG seed.
+    game_ply: u32,
 }
 
 impl Uci {
@@ -35,6 +47,9 @@ impl Uci {
             search: None,
             overhead_ms: 50,
             tt: Arc::new(Tt::new(16)),
+            book: None,
+            book_depth: DEFAULT_BOOK_DEPTH,
+            game_ply: 0,
         }
     }
 
@@ -49,6 +64,7 @@ impl Uci {
                 "ucinewgame" => {
                     self.stop_and_join();
                     self.pos = Position::startpos();
+                    self.game_ply = 0;
                     self.tt.clear();
                 }
                 "position" => {
@@ -100,27 +116,35 @@ impl Uci {
         println!("option name Threads type spin default 1 min 1 max 1");
         println!("option name MultiPV type spin default 1 min 1 max 1");
         println!("option name Move Overhead type spin default 50 min 0 max 5000");
+        // PolyGlot opening book: a file path (empty = off) and a ply cutoff.
+        println!("option name BookFile type string default <empty>");
+        println!("option name BookDepth type spin default {DEFAULT_BOOK_DEPTH} min 0 max 40");
         println!("uciok");
     }
 
     fn cmd_setoption(&mut self, line: &str) {
-        // setoption name <name words...> value <v>
+        // setoption name <name words...> value <v...>
+        // The value may contain spaces (e.g. a BookFile path), so everything
+        // after "value" is taken verbatim as a single string.
         let mut name = Vec::new();
-        let mut value = None;
+        let mut value: Option<String> = None;
         let mut tok = line.split_whitespace().skip(1); // skip "setoption"
         if tok.next() != Some("name") {
             return;
         }
+        let mut value_words: Vec<&str> = Vec::new();
         let mut in_value = false;
         for t in tok {
-            if t == "value" {
+            if !in_value && t == "value" {
                 in_value = true;
             } else if in_value {
-                value = Some(t.to_string());
-                break;
+                value_words.push(t);
             } else {
                 name.push(t);
             }
+        }
+        if in_value {
+            value = Some(value_words.join(" "));
         }
         let name = name.join(" ");
         match (name.as_str(), value) {
@@ -133,6 +157,14 @@ impl Uci {
                 if let Ok(mb) = v.parse::<usize>() {
                     self.stop_and_join();
                     self.tt = Arc::new(Tt::new(mb.clamp(1, 4096)));
+                }
+            }
+            ("BookFile", Some(v)) => {
+                self.set_book(&v);
+            }
+            ("BookDepth", Some(v)) => {
+                if let Ok(d) = v.parse::<u32>() {
+                    self.book_depth = d.min(40);
                 }
             }
             _ => {}
@@ -166,10 +198,14 @@ impl Uci {
             }
             _ => return,
         }
+        // game_ply = moves applied from the command's base position. The GUI
+        // re-sends the whole move list every move, so this stays accurate; it
+        // drives the book cutoff and varies the per-game RNG seed.
+        self.game_ply = 0;
         if saw_moves {
             for uci in tok {
                 match find_uci_move(&self.pos, uci) {
-                    Some(mv) if self.pos.make(mv) => {}
+                    Some(mv) if self.pos.make(mv) => self.game_ply += 1,
                     _ => {
                         println!("info string ignoring illegal move {uci}");
                         return;
@@ -179,7 +215,50 @@ impl Uci {
         }
     }
 
+    /// Loads (or clears) the opening book from a `BookFile` value. An empty
+    /// value or the UCI sentinel `<empty>` turns the book off; an unreadable
+    /// path is reported and leaves the book off (never fatal).
+    fn set_book(&mut self, path: &str) {
+        let path = path.trim();
+        if path.is_empty() || path == "<empty>" {
+            self.book = None;
+            return;
+        }
+        match Book::open(path) {
+            Ok(b) => {
+                println!("info string book loaded: {} entries", b.len());
+                self.book = Some(b);
+            }
+            Err(e) => {
+                println!("info string book load failed ({path}): {e}");
+                self.book = None;
+            }
+        }
+    }
+
+    /// If the book is loaded and the game is still inside the book window,
+    /// returns a book move for the current position (or `None`). The RNG seed
+    /// is deterministic per position-per-game but varies across games.
+    fn book_move(&self) -> Option<crate::board::Move> {
+        let book = self.book.as_ref()?;
+        if self.game_ply >= self.book_depth {
+            return None;
+        }
+        book.pick(&self.pos, self.pos.key() ^ self.game_ply as u64)
+    }
+
     fn cmd_go(&mut self, line: &str) {
+        // Book short-circuit: a pre-search root move source. When it hits we
+        // emit bestmove immediately with no search thread (and no info/time
+        // telemetry — there was no search). `go` parameters are ignored, which
+        // is correct: a book reply costs ~no clock.
+        if let Some(mv) = self.book_move() {
+            println!("info string book move {mv}");
+            println!("bestmove {mv}");
+            io::stdout().flush().ok();
+            return;
+        }
+
         let limits = parse_go(line);
         let mut st = SearchThread::new(self.pos.clone(), Hce::new());
         st.set_stop_flag(Arc::clone(&self.stop));

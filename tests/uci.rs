@@ -6,7 +6,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nebchess::board::{movegen::find_uci_move, Position};
+use nebchess::board::{movegen::find_uci_move, Move, Position, Square};
+use nebchess::book::polyglot_key;
 
 const T: Duration = Duration::from_secs(5);
 
@@ -201,6 +202,99 @@ fn checkmated_position_answers_null_bestmove() {
     e.send("go depth 3");
     let line = e.expect_line(|l| l.starts_with("bestmove"));
     assert_eq!(line, "bestmove 0000");
+}
+
+/// Encodes a from/to/promo into the PolyGlot 16-bit move (to:0..6, from:6..12,
+/// promo:12..15) — the layout the book reader decodes.
+fn pg_move(from: Square, to: Square, promo: u16) -> u16 {
+    (to.file() as u16)
+        | ((to.rank() as u16) << 3)
+        | ((from.file() as u16) << 6)
+        | ((from.rank() as u16) << 9)
+        | (promo << 12)
+}
+
+/// One 16-byte big-endian PolyGlot entry.
+fn pg_entry(key: u64, mv: u16, weight: u16) -> [u8; 16] {
+    let mut b = [0u8; 16];
+    b[0..8].copy_from_slice(&key.to_be_bytes());
+    b[8..10].copy_from_slice(&mv.to_be_bytes());
+    b[10..12].copy_from_slice(&weight.to_be_bytes());
+    // learn (b[12..16]) left zero
+    b
+}
+
+#[test]
+fn book_move_is_played_immediately_without_search() {
+    // Hand-build a one-entry book mapping startpos -> e2e4, write it to a temp
+    // file, point the engine at it, and confirm `go` returns the book move
+    // instantly with the book-move info line and no search info lines.
+    let e2 = Square::from_name("e2").unwrap();
+    let e4 = Square::from_name("e4").unwrap();
+    let key = polyglot_key(&Position::startpos());
+    let raw = pg_entry(key, pg_move(e2, e4, 0), 100);
+
+    let mut path = std::env::temp_dir();
+    path.push(format!("nebchess_test_book_{}.bin", std::process::id()));
+    std::fs::write(&path, raw).expect("write temp book");
+
+    let mut e = Engine::start();
+    e.send(&format!("setoption name BookFile value {}", path.display()));
+    e.send("position startpos");
+    e.send("go depth 30"); // a deep search would take a while; the book short-circuits it
+    let lines = e.collect_until(|l| l.starts_with("bestmove"));
+    let best = lines.last().unwrap();
+    assert_eq!(best, "bestmove e2e4", "book move must be returned");
+    assert!(
+        lines.iter().any(|l| l.contains("book move")),
+        "book-move info line expected, got: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.starts_with("info depth")),
+        "book hit must not run a search, got: {lines:?}"
+    );
+
+    // Past BookDepth the book is silent and a normal search runs.
+    e.send("setoption name BookDepth value 0");
+    e.send("position startpos");
+    e.send("go depth 3");
+    let lines = e.collect_until(|l| l.starts_with("bestmove"));
+    assert!(
+        lines.iter().any(|l| l.starts_with("info depth")),
+        "with BookDepth 0 a search must run, got: {lines:?}"
+    );
+    assert_legal_bestmove(lines.last().unwrap(), &Position::startpos());
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn book_castling_entry_resolves_to_castle_move() {
+    // PolyGlot encodes castling as king-takes-rook (e1h1). The engine must
+    // decode it to the legal e1g1 king-castle and play it from the book.
+    let fen = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+    let pos = Position::from_fen(fen).unwrap();
+    let key = polyglot_key(&pos);
+    let raw = pg_entry(key, pg_move(Square::E1, Square::H1, 0), 1);
+
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "nebchess_test_book_castle_{}.bin",
+        std::process::id()
+    ));
+    std::fs::write(&path, raw).expect("write temp book");
+
+    let mut e = Engine::start();
+    e.send(&format!("setoption name BookFile value {}", path.display()));
+    e.send(&format!("position fen {fen}"));
+    e.send("go depth 20");
+    let line = e.expect_line(|l| l.starts_with("bestmove"));
+    assert_eq!(line, "bestmove e1g1", "castle decoded from king-takes-rook");
+    // the decoded move must be a legal castle in the position
+    let mv = find_uci_move(&pos, "e1g1").unwrap();
+    assert_eq!(mv.flag(), Move::KING_CASTLE);
+
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
