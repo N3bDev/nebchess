@@ -210,3 +210,15 @@ python3 tools/analyze-field.py sacs            # step 1.4 screening (~45 min) + 
 Caches land in `tools/data/field-050/` (gitignored). The driver spawns the
 engine ONCE per phase and reuses it over a persistent UCI pipe (project law);
 the system must be otherwise idle (movetime results are timing-sensitive).
+
+## Update 2026-06-07 — TimeBrain v1 closes the clock-collapse leaks
+
+TimeBrain v1 (Gate 1: emergency reserve + best-move-stability soft-scaling +
+hard cap; +26.3 elo SPRT, shipped) directly addresses the 3 TimeBrain-fixable
+leaks. Validated against the worst one — **g35 (KR-K drawn on the 50-move
+counter while blitzing at depth 1)**: `tools/krk-stress.sh` plays KR-vs-K from
+`8/8/8/4k3/8/8/4K3/4R3 w` at 5+0.1, NebChess self-play, **20/20 decisive, 0
+draws**. The conversion-on-a-low-clock collapse is fixed. (The adaptive Gate-2
+layer — panic/won-fast/catch-up — was rejected, −16/−12 SPRT; deferred to M7.)
+The 2 knowledge leaks (g3/g19 KBvK +4.2 blindspot) are addressed by plan
+step 5.0 (insufficient-material detection) + Syzygy (T5).
