@@ -78,8 +78,8 @@ Leak at move 25 (held +481): played **g1h1** (passive king tuck), eval dropped
 241 cp; engine preferred **g1f2**. 10 s recheck: **+472, best still g1f2,
 depth 17** — depth does not budge the eval, the engine knows the winning move.
 The game move was a blitz-time error; with time the engine plays g1f2.
-EPD: `2r3r1/kpB4p/p4p1Q/1q1N4/n3P3/7P/P4bP1/2RR2K1 w - - 0 25 bm Bf2; id "LEAK.g34";`
-(engine-preferred g1f2; played g1h1).
+EPD: `2r3r1/kpB4p/p4p1Q/1q1N4/n3P3/7P/P4bP1/2RR2K1 w - - 0 25 bm Kxf2; id "LEAK.g34";`
+(engine-preferred g1f2 = Kxf2; played g1h1).
 
 **g14 — vs ImranMelikovBot — TimeBrain-fixable (no-progress / conversion).**
 No single ≥150 cp drop: NebChess held **+462 for 14 consecutive moves**
@@ -87,8 +87,8 @@ No single ≥150 cp drop: NebChess held **+462 for 14 consecutive moves**
 *progress* move while the game played a *shuffle*, ending in threefold.
 First clear divergence (move 46, +435): engine best **f3e3**, played **g3g4**.
 Peak/representative EPD (move 47, +486):
-`R7/P6k/8/8/r5p1/5K1P/8/8 w - - 0 47 bm Kg4; id "LEAK.g14";`. 10 s recheck:
-**+469, best h3g4, depth 35** — the eval is rock-stable; the engine evaluates
+`R7/P6k/8/8/r5p1/5K1P/8/8 w - - 0 47 bm hxg4; id "LEAK.g14";`. 10 s recheck:
+**+469, best h3g4 = hxg4, depth 35** — the eval is rock-stable; the engine evaluates
 the win correctly but, under blitz, never searched deep enough to choose the
 converting line over a safe shuffle. (Caveat: the engine's *own* best moves in
 this position are also slow king maneuvers; some endgame-technique weakness
