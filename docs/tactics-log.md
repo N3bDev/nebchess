@@ -6,6 +6,8 @@ Informational regression canary — self-play SPRT shares blind spots
 between both engines; this metric does not. A drop >= 10 positions vs
 the previous entry is a stop-and-investigate signal.
 
+**M5 canary trend (1s/position):** 267 (T1 tapered) → 261 (T2 pawns, K-incident recovered) → 262 (T3 mobility) → 257 (T4 KS, NPS tax) → 260 (fused, attribution probe) → 267 (T5 threats) → 268 (hybrid ship). Two genuine catches this milestone: the K-refit scale degeneracy (fired at the −10 floor, attributed, frozen) and the "tactically sharper ≠ stronger" big3 dissociation (269 canary / ±0 SPRT — caught by the gate pairing, not the canary alone). The floor discipline held: no build shipped below reference −10.
+
 | date | binary | WAC | notes |
 |------|--------|-----|-------|
 | 2026-06-05 | 0.3.x @ 38947c3 (post-aspiration) | 267/299 | 1 position skipped (WAC.274 bad fen); spec URL 404 — jdart1/arasan-chess mirror used |
@@ -21,6 +23,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-06 | *(infrastructure)* fused attack pass @ 9b6adfa | 260/299 | **attribution confirmed**: eval bit-identical to 689f1cf (257), +3 from NPS alone (recovers WAC.131/200/265/291 deep-sac finds; −1 threshold churn) — the T4 dip was time-tax, not eval-shaping |
 | 2026-06-06 | threats/coordination/tempo @ 021646d | 267/299 | **+7 — ties project high**: hanging/threat terms are tactical primitives (recovers king-attack + sacrifice motifs); val MSE −4.0%, biggest single-term drop since tapering |
 | 2026-06-06 | full joint tune on big3 7.15M @ b030465 | 269/299 | **+2 — NEW PROJECT HIGH**: review flagged deflated material vs fixed-cp margins as the risk (rook/queen sac motifs) — did not materialize; the bigger corpus sharpened tactical judgment |
-| 2026-06-06 | hybrid zurichess+big3 tune @ HEAD | 268/299 | top of band — half-distortion costs nothing tactically; hybrid ships after H1 | 
-
-**M5 canary trend (1s/position):** 267 (T1 tapered) → 261 (T2 pawns, K-incident recovered) → 262 (T3 mobility) → 257 (T4 KS, NPS tax) → 260 (fused, attribution probe) → 267 (T5 threats) → 268 (hybrid ship). Two genuine catches this milestone: the K-refit scale degeneracy (fired at the −10 floor, attributed, frozen) and the "tactically sharper ≠ stronger" big3 dissociation (269 canary / ±0 SPRT — caught by the gate pairing, not the canary alone). The floor discipline held: no build shipped below reference −10.
+| 2026-06-06 | hybrid zurichess+big3 tune @ HEAD | 268/299 | top of band — half-distortion costs nothing tactically; hybrid ships after H1 |

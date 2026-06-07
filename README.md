@@ -1,6 +1,6 @@
 # NebChess
 
-A from-scratch UCI chess engine in Rust, targeting 2400 CCRL Blitz.
+A from-scratch UCI chess engine in Rust. Measured 2783 ± 22 (10+0.1, anchored vs a Stash ladder — see docs/strength-log.md for caveats). M6 target: set after bracketed re-measurement (2900 path).
 
 Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/superpowers/specs/2026-06-04-nebchess-engine-design.md)
 

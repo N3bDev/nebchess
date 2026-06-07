@@ -4,6 +4,8 @@ Per-feature self-play results (protocol: tools/sprt.sh — STC 8+0.08, Hash 16,
 8moves_v3 book, reversed pairs, alpha=beta=0.05, model=normalized).
 H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseline.
 
+**M3 cumulative: +384.4 measured self-play elo over M2. M4 cumulative: +553.2 over M3** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only). Informational anchors: M3 closed 8-2 vs SF@1800; M4 closed 10-0 vs SF@2000. **M5 cumulative: +379.1 self-play (gates T1-T6) → +369 anchored (2414→2783).**
+
 | date | feature | vs baseline | bounds | games | W-L-D | result | bench |
 |------|---------|-------------|--------|-------|-------|--------|-------|
 | 2026-06-05 | TT cutoffs | m2 | [0,10] | 568 | 241-154-173 | **H1: +53.6 ±22.2** (2 timeouts = host load; controlled gauntlet 0/200) | 3027664 |
@@ -27,5 +29,3 @@ H1 accepted = gain >= elo1 confirmed; the feature binary becomes the next baseli
 | 2026-06-06 | big3 7.15M joint tune (M5 T6 values) | threats | [0,5] | 1788 | — | **STOPPED UNRESOLVED at user call: −0.0 ±13.0, LLR −0.18 — NOT baselined** (walked 0→−27→−14→0; canary 269 = project high yet plays dead even: "tactically sharper ≠ stronger engine"). Values reverted to T5; big3 = useful failed evidence — needs scale/phase controls (plan step 6.5 investigation). Tuner infra (9× parallel, big3 loader) RETAINED | 70048 |
 | 2026-06-06 | *(probe, not a gate)* exp1 fit-K / exp2 pin-material | threats | — | — | — | step 6.5 experiments 1-2 FALSIFIED analytically: K_big3=1.305 bought zero fit, distortion persisted; pinning material re-routed it into MOB_QUEEN — intrinsic phase-conditional label noise in human blitz | 64698/68308 |
 | 2026-06-06 | **Hybrid zurichess+big3 1:1 tune** (M5 T6 final) | threats | [0,5] | 3558 | 1076-904-1578 | **H1: 52.42%, LOS 100% (~+17)** — dilution carries half the distortion, coverage outweighs it; canary 268; 3 timeouts (old side, host noise); probe 400g was +13.9 ±25.6 | 77211 |
-
-**M3 cumulative: +384.4 measured self-play elo over M2. M4 cumulative: +553.2 over M3** (self-play deltas overstate rating-list deltas ~1.5x per spec §10.4 — absolute claims come from anchored gauntlets only). Informational anchors: M3 closed 8-2 vs SF@1800; M4 closed 10-0 vs SF@2000.
