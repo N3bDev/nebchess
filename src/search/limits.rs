@@ -9,17 +9,18 @@
 //! when the PV is settled, spend longer right after it changes), and caps any
 //! single move at a third of the usable clock.
 //!
-//! Gate 2 (T3) layers three field-motivated adaptive behaviors:
+//! Gate 2 (T3) layers two field-motivated adaptive behaviors (won-fast, a
+//! third Gate-2 behavior, was carved out: a +500 eval at this strength is
+//! often a sharp position still needing accuracy, not a trivial win, so
+//! halving time there lost games):
 //! - **panic extension** — a >=50cp eval drop at depth >=8 extends the soft
 //!   deadline (the "I'm getting mated" late realization from the corpus);
-//! - **won-fast** — a >=+500 score with a settled PV shrinks it (don't burn
-//!   the clock converting a won position);
 //! - **clock catch-up** — being well behind on the clock trims the base soft
 //!   at allocation (stay in time).
 //!
-//! Resolution order between iterations: panic-extend beats won-fast beats
-//! stability (see [`TimeManager::report_iteration`]); catch-up is allocation-
-//! time only (see [`TimeManager::new`]).
+//! Resolution order between iterations: panic-extend beats stability (see
+//! [`TimeManager::report_iteration`]); catch-up is allocation-time only (see
+//! [`TimeManager::new`]).
 
 use std::time::{Duration, Instant};
 
@@ -49,18 +50,15 @@ const PANIC_DROP_CP: i32 = 50;
 /// ...but only once the search is deep enough to trust the drop (shallow
 /// score swings are noise, not danger).
 const PANIC_MIN_DEPTH: i32 = 8;
-/// Won-fast fires at/above this score (with a settled PV): stop burning the
-/// clock converting an already-won position (the corpus clock-collapse pattern).
-const WON_SCORE_CP: i32 = 500;
 
 pub struct TimeManager {
     start: Instant,
     soft: Option<Duration>, // base soft (post-catch-up, pre-trend-scaling)
     hard: Option<Duration>,
     // `go movetime N` is a UCI EXACT-budget contract: the search must spend ~N
-    // ms regardless of stability/won-fast/panic. True ONLY for the movetime
-    // branch (where soft==hard); when set, `effective_soft_ms` returns the base
-    // soft UNSCALED so trend-scaling cannot shrink (or grow) the budget.
+    // ms regardless of stability/panic. True ONLY for the movetime branch
+    // (where soft==hard); when set, `effective_soft_ms` returns the base soft
+    // UNSCALED so trend-scaling cannot shrink (or grow) the budget.
     exact: bool,
     // Gate-1 stability state:
     last_best: u16,      // caller-supplied move key (Move's raw bits)
@@ -146,21 +144,19 @@ impl TimeManager {
     /// of the iteration's best move; `score_cp` its score (side-to-move cp).
     ///
     /// Stability (Gate 1): a repeat of the previous best grows `stable_iters`;
-    /// a change resets it. Gate 2 layers two score-trend behaviors on top via a
+    /// a change resets it. Gate 2 layers one score-trend behavior on top via a
     /// single priority chain — the resolution ORDER is fixed:
     ///
     ///   1. PANIC-EXTEND (beats everything): a >= [`PANIC_DROP_CP`] eval drop
     ///      from the previous iteration at depth >= [`PANIC_MIN_DEPTH`] — the
     ///      "I'm getting mated" late realization. Spend MORE (pct 150).
-    ///   2. WON-FAST (beats stability): score >= [`WON_SCORE_CP`] with a settled
-    ///      PV (`stable_iters >= 3`). Don't burn the clock converting a won
-    ///      game — spend LESS (pct 50).
-    ///   3. STABILITY (Gate 1, unchanged): change-extend 140 / settled 60 /
+    ///   2. STABILITY (Gate 1, unchanged): change-extend 140 / settled 60 /
     ///      almost-settled 80 / base 100.
     ///
-    /// With no eval drop, no won-fast, and an even clock the resolved scale is
-    /// IDENTICAL to Gate 1 (the chain falls through to branch 3). The catch-up
-    /// behavior is allocation-time only (see [`new`]), not here.
+    /// `score_cp` is consumed only by panic now (won-fast, which also read it,
+    /// was carved out). With no eval drop and an even clock the resolved scale
+    /// is IDENTICAL to Gate 1 (the chain falls through to branch 2). The
+    /// catch-up behavior is allocation-time only (see [`new`]), not here.
     pub fn report_iteration(&mut self, depth: i32, score_cp: i32, best_key: u16) {
         if best_key == self.last_best {
             self.stable_iters += 1;
@@ -173,11 +169,9 @@ impl TimeManager {
             && self
                 .prev_score
                 .is_some_and(|prev| prev - score_cp >= PANIC_DROP_CP);
-        // Priority chain: panic-extend > won-fast > stability.
+        // Priority chain: panic-extend > stability.
         self.soft_scale_pct = if panic {
             150
-        } else if score_cp >= WON_SCORE_CP && self.stable_iters >= 3 {
-            50
         } else if self.stable_iters == 0 && depth > 1 {
             // change-extend: still discovering right after a best-move change.
             140
@@ -263,25 +257,25 @@ mod tests {
     }
 
     #[test]
-    fn movetime_is_exact_under_won_stable() {
-        // movetime is a UCI EXACT-budget contract: a won + stable position must
-        // NOT trigger won-fast (50%) scaling on the movetime budget. Regression
-        // for `go movetime 2000` stopping at ~550ms on a won, settled position.
+    fn movetime_is_exact_under_stable_pv() {
+        // movetime is a UCI EXACT-budget contract: trend-scaling must NOT touch
+        // the movetime budget. A settled PV would scale a wtime search to 60%
+        // (Gate-1 stability); movetime stays at the full budget.
         let l = Limits {
             movetime: Some(2_000),
             ..Limits::default()
         };
         let mut tm = TimeManager::new(&l, Color::White, 0, None);
         let soft = tm.budgets_ms().0.unwrap();
-        // Won + settled PV across 4 iterations (stable_iters >= 3 + score >= 500
-        // would scale to 50% on a wtime search via won-fast).
+        // Settled PV across 4 iterations (stable_iters >= 3 would scale to 60%
+        // on a wtime search).
         for d in 7..=10 {
             tm.report_iteration(d, 800, 1 /*same move key*/);
         }
         assert_eq!(
             tm.effective_soft_ms(),
             Some(soft),
-            "movetime is exact: full budget, NOT scaled to 50% by won-fast"
+            "movetime is exact: full budget, NOT scaled by stability"
         );
     }
 
@@ -422,7 +416,7 @@ mod tests {
         assert!(hard.unwrap() <= 10_000, "never >1/3 of usable on one move");
     }
 
-    // ---- TimeBrain Gate 2: panic extension + won-fast + clock catch-up ----
+    // ---- TimeBrain Gate 2: panic extension + clock catch-up (won-fast carved out) ----
 
     #[test]
     fn score_drop_at_depth_extends_soft() {
@@ -450,23 +444,25 @@ mod tests {
     }
 
     #[test]
-    fn won_position_spends_less() {
-        // (b) score >= +500 with a settled PV (stable_iters >= 3): don't burn
-        // the clock converting a won game — spend half (pct 50).
+    fn won_position_uses_gate1_stability() {
+        // won-fast was CARVED OUT: a score >= +500 with a settled PV no longer
+        // halves the budget (pct 50). It must fall through to Gate-1 stability
+        // — a settled PV (stable_iters >= 3) scales to 60, exactly as any other
+        // settled position does, regardless of how winning the score is.
         let l = Limits {
             wtime: Some(60_000),
             ..Limits::default()
         };
         let mut tm = TimeManager::new(&l, Color::White, 10, None);
         let base = tm.budgets_ms().0.unwrap();
-        // 4 iterations, same move, comfortably winning, no drops -> won-fast.
+        // 4 iterations, same move, comfortably winning, no drops.
         for d in 1..=4 {
             tm.report_iteration(d, 600, 1 /*same move key*/);
         }
         assert_eq!(
             tm.effective_soft_ms().unwrap(),
-            base * 50 / 100,
-            "won + stable: pct 50"
+            base * 60 / 100,
+            "won + stable now uses Gate-1 stability (pct 60), NOT won-fast (50)"
         );
     }
 
