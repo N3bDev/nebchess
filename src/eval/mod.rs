@@ -2,8 +2,10 @@
 //! refresh/on_make/on_unmake unconditionally from M2 onward; HCE no-ops
 //! them, a future NNUE updates its accumulator there.
 
+pub mod eval_params;
 pub mod hce;
-pub mod psqt;
+pub mod manifest;
+pub mod trace;
 
 use crate::board::{Move, Position};
 
