@@ -302,6 +302,11 @@ pub struct SearchThread<E: Evaluator> {
     history: Box<HistoryTable>,
     cont_hist1: Box<ContHist>,
     cont_hist2: Box<ContHist>,
+    /// Move-time telemetry from the last `iterate` call: (base soft, hard) ms
+    /// and ms actually spent. Read by the UCI layer for the per-move
+    /// `info string time` line (the clock-collapse field instrument).
+    last_budgets_ms: (Option<u64>, Option<u64>),
+    last_used_ms: u128,
 }
 
 impl<E: Evaluator> SearchThread<E> {
@@ -321,7 +326,21 @@ impl<E: Evaluator> SearchThread<E> {
             history: Box::new([[[0; 64]; 64]; 2]),
             cont_hist1: zeroed_cont_hist(),
             cont_hist2: zeroed_cont_hist(),
+            last_budgets_ms: (None, None),
+            last_used_ms: 0,
         }
+    }
+
+    /// Move-time telemetry from the last [`iterate`](Self::iterate):
+    /// `(base_soft_ms, hard_ms, used_ms)`. The soft/hard are `None` when the
+    /// search had no clock (infinite / depth / nodes). For the UCI layer's
+    /// per-move `info string time` line.
+    pub fn last_move_time(&self) -> (Option<u64>, Option<u64>, u128) {
+        (
+            self.last_budgets_ms.0,
+            self.last_budgets_ms.1,
+            self.last_used_ms,
+        )
     }
 
     /// Share this flag with the UCI thread; setting it aborts the search.
@@ -898,7 +917,7 @@ impl<E: Evaluator> SearchThread<E> {
     /// `info` is called after every COMPLETED iteration.
     /// NOTE: the caller owns stop-flag hygiene — clear it BEFORE spawning the search thread (a worker-side clear races with an early external stop).
     pub fn iterate(&mut self, limits: &Limits, mut info: impl FnMut(IterInfo)) -> Option<Move> {
-        let tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms);
+        let mut tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms);
         self.deadline = tm.hard_deadline();
         self.node_limit = limits.nodes;
         self.nodes = 0;
@@ -936,6 +955,10 @@ impl<E: Evaluator> SearchThread<E> {
                 elapsed_ms: tm.elapsed_ms(),
                 pv: self.pv.line(),
             });
+            // TimeBrain: feed this iteration's best move into the controller
+            // (stability scaling) BEFORE consulting the soft deadline. The
+            // search tree itself is untouched — only `past_soft` shifts.
+            tm.report_iteration(depth, score, best.raw());
             if tm.past_soft() {
                 break;
             }
@@ -943,6 +966,11 @@ impl<E: Evaluator> SearchThread<E> {
                 break; // forced mate found; deeper search can't change it
             }
         }
+        // Stash move-time telemetry for the UCI layer to emit (one info-string
+        // per move). Kept off the return path so solve/bench/tests stdout is
+        // untouched; cmd_go reads it after iterate returns.
+        self.last_budgets_ms = tm.budgets_ms();
+        self.last_used_ms = tm.elapsed_ms();
         Some(best)
     }
 }

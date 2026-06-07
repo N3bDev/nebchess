@@ -190,6 +190,15 @@ impl Uci {
         self.stop.store(false, Ordering::Relaxed);
         self.search = Some(std::thread::spawn(move || {
             let best = st.iterate(&limits, print_info);
+            // Move-time telemetry (ungated, one line per move): budgeted soft/
+            // hard vs ms actually spent — the clock-collapse field instrument.
+            let (soft, hard, used) = st.last_move_time();
+            let fmt = |o: Option<u64>| o.map_or_else(|| "-".to_string(), |v| v.to_string());
+            println!(
+                "info string time soft={} hard={} used={used}",
+                fmt(soft),
+                fmt(hard)
+            );
             match best {
                 Some(mv) => println!("bestmove {mv}"),
                 None => println!("bestmove 0000"), // no legal moves on board
