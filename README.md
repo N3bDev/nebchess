@@ -12,7 +12,8 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M3: transposition table + move ordering + PVS
 - [x] M4: search pruning (null move, LMR, aspiration) + PST tuning pipeline
 - [x] M5: full HCE evaluation + Texel tuning at scale
-- [ ] M6: search & eval polish + bot readiness (book, Syzygy, time management, Lichess hardening)
+- [x] M6a: bracketed measurement + search polish (SEE, conthist; LMR/extensions/futility-v2 honestly H0'd)
+- [ ] M6b: TimeBrain + bot readiness (book, Syzygy, pondering, Lichess hardening)
 
 ## Play against it
 

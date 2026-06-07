@@ -1,6 +1,6 @@
 [package]
 name = "nebchess"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "A from-scratch UCI chess engine targeting 2400 CCRL Blitz"
 repository = "https://github.com/N3bDev/nebchess"
