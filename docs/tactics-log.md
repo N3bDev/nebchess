@@ -28,3 +28,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-07 | continuation history @ bd81973 | 273/299 | **+2 — project high again**: ordering gains compound with SEE depth; note: tables persist per-go only (SearchThread recreated per search — cross-move persistence is the Plan 7 conthist refactor) |
 | 2026-06-07 | log-formula LMR + history adj @ 033c6b7 | 270/299 | −3, within floor — deeper cold-quiet reductions trade threshold tactics for tree size; SPRT arbitrates |
 | 2026-06-07 | singular + check extensions @ dd9143c | 276/299 | **+3 — PROJECT HIGH**: forcing-line extensions are pure WAC fuel; prediction verified (unlike the M5 king-safety expectation) |
+| 2026-06-07 | futility v2 (d<=4 + gives_check) @ 384143f | 272/299 | **THE IOU PAYS: −1 vs the unguarded M4 variant's −11** — the gives_check guard was the missing piece exactly as the incident attribution said; watch gate passed |
