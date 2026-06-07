@@ -3,7 +3,10 @@
 
 pub mod bench;
 pub mod limits;
+mod see;
 pub mod tt;
+
+use see::see;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -579,6 +582,12 @@ impl<E: Evaluator> SearchThread<E> {
         while let Some(mv) = picker.next() {
             // quiet moves only matter when evading check
             if !in_check && !mv.is_capture() {
+                continue;
+            }
+            // SEE pruning: skip captures that lose material outright (not while
+            // in check — every evasion must be tried; not promotions — the
+            // value swing is too big for the no-promo SEE approximation).
+            if !in_check && mv.is_capture() && !mv.is_promotion() && see(&self.pos, mv) < 0 {
                 continue;
             }
             if !self.pos.make(mv) {
