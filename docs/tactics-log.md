@@ -27,3 +27,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-07 | SEE + qsearch pruning @ 08cfb32 | 271/299 | **+3 — NEW PROJECT HIGH**: ~26% node cut buys depth; sound sacs unaffected (checks bypass the SEE gate); WAC.288 verified in review |
 | 2026-06-07 | continuation history @ bd81973 | 273/299 | **+2 — project high again**: ordering gains compound with SEE depth; note: tables persist per-go only (SearchThread recreated per search — cross-move persistence is the Plan 7 conthist refactor) |
 | 2026-06-07 | log-formula LMR + history adj @ 033c6b7 | 270/299 | −3, within floor — deeper cold-quiet reductions trade threshold tactics for tree size; SPRT arbitrates |
+| 2026-06-07 | singular + check extensions @ dd9143c | 276/299 | **+3 — PROJECT HIGH**: forcing-line extensions are pure WAC fuel; prediction verified (unlike the M5 king-safety expectation) |
