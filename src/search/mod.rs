@@ -917,7 +917,13 @@ impl<E: Evaluator> SearchThread<E> {
     /// `info` is called after every COMPLETED iteration.
     /// NOTE: the caller owns stop-flag hygiene — clear it BEFORE spawning the search thread (a worker-side clear races with an early external stop).
     pub fn iterate(&mut self, limits: &Limits, mut info: impl FnMut(IterInfo)) -> Option<Move> {
-        let mut tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms);
+        // Gate-2 clock catch-up needs the OPPONENT's clock: stm white → btime,
+        // stm black → wtime (both carried on the `go` command).
+        let opp_time = match self.pos.stm() {
+            crate::board::Color::White => limits.btime,
+            crate::board::Color::Black => limits.wtime,
+        };
+        let mut tm = TimeManager::new(limits, self.pos.stm(), self.overhead_ms, opp_time);
         self.deadline = tm.hard_deadline();
         self.node_limit = limits.nodes;
         self.nodes = 0;
