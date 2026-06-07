@@ -1,6 +1,6 @@
 # NebChess
 
-A from-scratch UCI chess engine in Rust. Measured **2774 ± 16** (10+0.1, anchored vs a 3-family pool bracketing from above — see docs/strength-log.md for caveats). **M6 target: 2900 (stretch 3000).**
+A from-scratch UCI chess engine in Rust. Measured **2811 ± 16** (10+0.1, anchored vs a 3-family pool — see docs/strength-log.md for caveats). **M6 target: 2900 (stretch 3000).**
 
 Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/superpowers/specs/2026-06-04-nebchess-engine-design.md)
 
