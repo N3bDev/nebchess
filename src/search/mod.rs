@@ -460,6 +460,13 @@ impl<E: Evaluator> SearchThread<E> {
             if self.pos.is_fifty_move_draw() {
                 return self.fifty_move_score(ply);
             }
+            // Insufficient material (KvK/KNvK/KBvK + mirrors): an unconditional
+            // draw — return the draw score so the SEARCH propagates it (not just
+            // a 0 at the leaf). No mate-precedence wrinkle: with ≤1 minor and no
+            // pawns/rooks/queens, neither side can deliver mate.
+            if self.pos.is_insufficient_material() {
+                return self.draw_score();
+            }
         }
         if depth <= 0 {
             return self.qsearch(alpha, beta, ply);

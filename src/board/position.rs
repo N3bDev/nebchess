@@ -610,6 +610,36 @@ impl Position {
             | self.piece_bb(color, PieceType::Queen))
         .any()
     }
+
+    /// Material so reduced that checkmate is impossible for either side: a
+    /// hard draw the eval would otherwise misread (field-analysis-050: the
+    /// engine held ~+4.2 in K+B-v-K and *more depth made it more wrong*).
+    ///
+    /// The minimal, standard v1 set: NO pawns, rooks, or queens anywhere, AND
+    /// at most one minor (knight or bishop) on the whole board. That admits
+    /// exactly KvK (0 minors), KNvK and KBvK (1 minor), with color mirrors
+    /// (the count is across both sides). Any pawn/rook/queen makes it
+    /// sufficient (the cheapest rejection, checked first). DELIBERATELY left
+    /// out of v1: KNNvK (two knights CAN, rarely, checkmate — not an
+    /// unconditional draw) and same-colored-bishops KBvKB (a true draw, but it
+    /// needs a bishop-square parity check; a false negative here is safe —
+    /// Syzygy or the 50-move rule still catches it).
+    pub fn is_insufficient_material(&self) -> bool {
+        for color in [Color::White, Color::Black] {
+            if (self.piece_bb(color, PieceType::Pawn)
+                | self.piece_bb(color, PieceType::Rook)
+                | self.piece_bb(color, PieceType::Queen))
+            .any()
+            {
+                return false;
+            }
+        }
+        let minors = self.piece_bb(Color::White, PieceType::Knight).count()
+            + self.piece_bb(Color::White, PieceType::Bishop).count()
+            + self.piece_bb(Color::Black, PieceType::Knight).count()
+            + self.piece_bb(Color::Black, PieceType::Bishop).count();
+        minors <= 1
+    }
 }
 
 #[cfg(test)]
@@ -1041,5 +1071,42 @@ mod tests {
         assert!(!pos.has_non_pawn_material(Color::Black));
         let pos = Position::from_fen("4k3/8/8/8/8/8/4P3/4KN2 w - - 0 1").unwrap();
         assert!(pos.has_non_pawn_material(Color::White));
+    }
+
+    #[test]
+    fn insufficient_material_truth_table() {
+        // Draws (true): KvK, KNvK, KBvK, KvKB (color mirror).
+        for fen in [
+            ("4k3/8/8/8/8/8/8/4K3 w - - 0 1", "KvK"),
+            ("4k3/8/8/8/8/8/8/3NK3 w - - 0 1", "KNvK"),
+            ("4k3/8/8/8/8/2B5/8/4K3 w - - 0 1", "KBvK"),
+            ("3nk3/8/8/8/8/8/8/4K3 w - - 0 1", "KvKN"),
+            ("2b1k3/8/8/8/8/8/8/4K3 w - - 0 1", "KvKB"),
+        ] {
+            assert!(
+                Position::from_fen(fen.0)
+                    .unwrap()
+                    .is_insufficient_material(),
+                "{} must be insufficient",
+                fen.1
+            );
+        }
+        // NOT draws (false): KPvK, KNNvK (mate possible), KBvKB (needs a
+        // square-parity check — out of the v1 set), KRvK, startpos.
+        for fen in [
+            ("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1", "KPvK"),
+            ("4k3/8/8/8/8/8/8/1N1NK3 w - - 0 1", "KNNvK"),
+            ("2b1k3/8/8/8/8/2B5/8/4K3 w - - 0 1", "KBvKB"),
+            ("4k3/8/8/8/8/8/8/R3K3 w - - 0 1", "KRvK"),
+            (START_FEN, "startpos"),
+        ] {
+            assert!(
+                !Position::from_fen(fen.0)
+                    .unwrap()
+                    .is_insufficient_material(),
+                "{} must NOT be insufficient",
+                fen.1
+            );
+        }
     }
 }
