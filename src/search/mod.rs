@@ -24,6 +24,33 @@ pub const MATE_BOUND: i32 = 29_000;
 pub const INF: i32 = 32_000;
 pub const MAX_PLY: usize = 128;
 
+// ---------------------------------------------------------------------------
+// M6.1 T9 sweep surface — named margin constants.
+// These are the knobs Task 9 exposes for tuning; changing them is the only
+// thing the margin-sweep task does (bench must remain identical after rename).
+// ---------------------------------------------------------------------------
+
+/// RFP: per-depth margin when the side-to-move is improving (cp × depth).
+const RFP_MARGIN_IMPROVING: i32 = 60;
+/// RFP: per-depth margin when NOT improving (cp × depth).
+const RFP_MARGIN: i32 = 80;
+/// RFP: maximum depth at which reverse futility pruning fires.
+const RFP_MAX_DEPTH: i32 = 6;
+
+/// Futility pruning: per-depth slope (cp × depth).
+/// The `depth <= 2` depth guard is NOT a sweep knob — it was fixed at 2 after
+/// the 2026-06-05 incident where deeper futility broke sacrificial combinations
+/// (WAC canary 268→257). It stays as a literal to make that constraint visible.
+const FUT_D2_SLOPE: i32 = 90;
+/// Futility pruning: flat base margin (cp).
+const FUT_D2_BASE: i32 = 120;
+
+/// Null-move reduction (plies). Replaces the local `const R: i32 = 3` in negamax.
+const NULL_R: i32 = 3;
+
+/// Aspiration window: initial half-width around the previous iteration's score (cp).
+const ASP_DELTA: i32 = 25;
+
 /// Triangular PV table: row[ply] holds the best line found at that ply.
 struct PvTable {
     moves: Vec<[Move; MAX_PLY]>,
@@ -460,11 +487,15 @@ impl<E: Evaluator> SearchThread<E> {
         // range only) so we never truncate forced-mate lines.
         if ply > 0
             && !in_check
-            && depth <= 6
+            && depth <= RFP_MAX_DEPTH
             && beta.abs() < MATE_BOUND
             && static_eval.abs() < MATE_BOUND
         {
-            let margin = (if improving { 60 } else { 80 }) * depth;
+            let margin = (if improving {
+                RFP_MARGIN_IMPROVING
+            } else {
+                RFP_MARGIN
+            }) * depth;
             if static_eval - margin >= beta {
                 return static_eval;
             }
@@ -481,11 +512,10 @@ impl<E: Evaluator> SearchThread<E> {
             && self.stack[ply - 1].current_move != Move::NULL
             && self.pos.has_non_pawn_material(self.pos.stm())
         {
-            const R: i32 = 3;
             self.stack[ply].current_move = Move::NULL;
             self.stack[ply].moved_piece = PieceType::Pawn; // NULL move: never read
             self.pos.make_null();
-            let score = -self.negamax(depth - 1 - R, -beta, -beta + 1, ply + 1);
+            let score = -self.negamax(depth - 1 - NULL_R, -beta, -beta + 1, ply + 1);
             self.pos.unmake_null();
             if self.stopped {
                 return 0;
@@ -514,7 +544,7 @@ impl<E: Evaluator> SearchThread<E> {
             && !in_check
             && depth <= 2
             && alpha.abs() < MATE_BOUND
-            && static_eval + 90 * depth + 120 <= alpha;
+            && static_eval + FUT_D2_SLOPE * depth + FUT_D2_BASE <= alpha;
         let mut picker = MovePicker::new(
             &self.pos,
             tt_move,
@@ -837,7 +867,7 @@ impl<E: Evaluator> SearchThread<E> {
 
     /// Narrow window around the previous score; widen exponentially on fail.
     fn aspiration(&mut self, depth: i32, guess: i32) -> (Option<Move>, i32) {
-        let mut delta = 25;
+        let mut delta = ASP_DELTA;
         let mut alpha = (guess - delta).max(-INF);
         let mut beta = (guess + delta).min(INF);
         loop {
