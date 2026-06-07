@@ -515,6 +515,18 @@ impl<E: Evaluator> SearchThread<E> {
             && depth <= 2
             && alpha.abs() < MATE_BOUND
             && static_eval + 90 * depth + 120 <= alpha;
+        // Futility v2 (M6 — the c41d9c6 IOU): d3-4 quiets whose hopeless static
+        // eval can't reach alpha are skipped POST-make, behind a gives_check
+        // guard. The guard is what makes d3-4 safe — checking continuations
+        // (the sacrificial combinations the M4 canary lost) must never be
+        // skipped. gives_check is free post-make in our legality-by-rollback
+        // flow, so this flag only sets the precondition; the per-move skip
+        // (with the guard) lives in the loop after make succeeds.
+        let futile_v2 = ply > 0
+            && !in_check
+            && (3..=4).contains(&depth)
+            && alpha.abs() < MATE_BOUND
+            && static_eval + 110 * depth + 150 <= alpha;
         let mut picker = MovePicker::new(
             &self.pos,
             tt_move,
@@ -538,7 +550,9 @@ impl<E: Evaluator> SearchThread<E> {
         while let Some(mv) = picker.next() {
             // futility: at very shallow depth with a hopeless eval, quiet moves
             // can't recover. depth <= 2 only: deeper skips break sacrificial
-            // combinations (WAC canary 268->257, attributed by A/B 2026-06-05)
+            // combinations (WAC canary 268->257, attributed by A/B 2026-06-05).
+            // d3-4 returns POST-make with a gives_check guard (futility v2, M6 —
+            // the c41d9c6 IOU).
             if futile && legal > 0 && !mv.is_capture() && !mv.is_promotion() {
                 continue;
             }
@@ -552,6 +566,26 @@ impl<E: Evaluator> SearchThread<E> {
             self.stack[ply].current_move = mv;
             self.stack[ply].moved_piece = moved_piece;
             legal += 1;
+            // Futility v2 skip (d3-4, POST-make). The move IS legal (counted in
+            // `legal`), but a non-checking quiet at a hopeless eval can't recover
+            // — skip it unsearched. gives_check guard: a checking continuation is
+            // never skipped (the M4-canary safety — checks reach the lost
+            // sacrificial combinations). The no-king guard mirrors the node-entry
+            // one: a king-capturing GUI FEN leaves the new stm without a king, and
+            // `in_check` -> `king_sq` -> `lsb()` on an empty board would read
+            // garbage. `legal > 1` keeps the first legal move (which already
+            // cleared `first`) searched; the skip sits BEFORE the `tried_quiets`
+            // push so a skipped move never earns the conthist malus.
+            if futile_v2 && legal > 1 && is_quiet {
+                let new_stm = self.pos.stm();
+                let gives_check = !self.pos.piece_bb(new_stm, PieceType::King).is_empty()
+                    && self.pos.in_check(new_stm);
+                if !gives_check {
+                    self.pos.unmake();
+                    self.eval.on_unmake(mv, &self.pos);
+                    continue;
+                }
+            }
             if is_quiet && tried_quiet_count < tried_quiets.len() {
                 tried_quiets[tried_quiet_count] = (mv, moved_piece);
                 tried_quiet_count += 1;
