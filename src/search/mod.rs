@@ -148,6 +148,33 @@ const ATTACKER_VALS: [i32; 6] = [100, 320, 330, 500, 900, 10_000];
 /// previous ply. `None` when that ply is out of range or made a null move.
 type ContKey = Option<(PieceType, crate::board::Square)>;
 
+/// Combined quiet-move history score: `butterfly + 2×conthist(1-ply) +
+/// conthist(2-ply)`. Single source of truth for BOTH the [`MovePicker`] quiet
+/// ordering and the history-driven LMR adjustment in `negamax` — they must read
+/// the same number or ordering and reduction disagree.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn quiet_history(
+    history: &HistoryTable,
+    cont_hist1: &ContHist,
+    cont_hist2: &ContHist,
+    ch1: ContKey,
+    ch2: ContKey,
+    stm: crate::board::Color,
+    piece: PieceType,
+    from: crate::board::Square,
+    to: crate::board::Square,
+) -> i32 {
+    let mut s = history[stm.index()][from.index()][to.index()];
+    if let Some((pp, pto)) = ch1 {
+        s += i32::from(cont_hist1[pp.index()][pto.index()][piece.index()][to.index()]) * 2;
+    }
+    if let Some((pp, pto)) = ch2 {
+        s += i32::from(cont_hist2[pp.index()][pto.index()][piece.index()][to.index()]);
+    }
+    s
+}
+
 impl MovePicker {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -180,20 +207,21 @@ impl MovePicker {
             } else if mv == killers[1] {
                 899_999
             } else {
-                // quiet ordering: butterfly + 2×conthist(1-ply) + conthist(2-ply)
-                let mut s = history[stm.index()][mv.from().index()][mv.to().index()];
+                // quiet ordering: butterfly + 2×conthist(1-ply) + conthist(2-ply),
+                // via the shared `quiet_history` helper (same score the LMR
+                // history adjustment reads).
                 let piece = pos.piece_on(mv.from()).expect("mover").piece_type();
-                if let Some((pp, pto)) = ch1 {
-                    s += i32::from(
-                        cont_hist1[pp.index()][pto.index()][piece.index()][mv.to().index()],
-                    ) * 2;
-                }
-                if let Some((pp, pto)) = ch2 {
-                    s += i32::from(
-                        cont_hist2[pp.index()][pto.index()][piece.index()][mv.to().index()],
-                    );
-                }
-                s
+                quiet_history(
+                    history,
+                    cont_hist1,
+                    cont_hist2,
+                    ch1,
+                    ch2,
+                    stm,
+                    piece,
+                    mv.from(),
+                    mv.to(),
+                )
             };
         }
         MovePicker {
