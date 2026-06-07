@@ -61,9 +61,10 @@ impl PvTable {
     }
 }
 
-/// Per-ply search state (spec §5.1). M3 uses `killers` and `current_move`;
-/// `static_eval` (M4: RFP/improving) and `excluded_move` (M6: singular
-/// extensions) are reserved so their features don't re-layout the stack.
+/// Per-ply search state (spec §5.1). `killers`/`current_move` (M3),
+/// `static_eval` (M4: RFP/improving), `moved_piece` (M5: conthist key) and
+/// `excluded_move` (M6: singular extensions) all live here so adding a feature
+/// never re-layouts the stack.
 #[derive(Clone, Copy)]
 struct StackEntry {
     static_eval: i32,
@@ -73,7 +74,10 @@ struct StackEntry {
     /// null move stores `PieceType::Pawn` here, which is never read).
     moved_piece: PieceType,
     killers: [Move; 2],
-    #[allow(dead_code)] // M6
+    /// The move to skip in this node's search — set by the singular-extension
+    /// verification search, which recurses at the SAME ply to prove the TT move
+    /// is the only one above a reduced beta. Reset to `Move::NULL` immediately
+    /// after that verification returns (the stack slot is shared).
     excluded_move: Move,
 }
 
@@ -430,8 +434,15 @@ impl<E: Evaluator> SearchThread<E> {
         // path-dependent draw scores (repetition/50-move). The draw checks
         // above run BEFORE the probe, bounding the damage; this is universal
         // practice at this engine level.
+        // Singular-extension exclusion: when set, this node is a verification
+        // search proving the TT move is singular. The stored TT result describes
+        // the UN-excluded node, so we must not adopt its cutoff; likewise null
+        // move / RFP / the TT store at exit are all disabled (they'd record a
+        // result for the wrong node). The move loop skips `excluded_move`.
+        let excluded = self.stack[ply].excluded_move != Move::NULL;
+
         let tt_hit = self.tt.probe(self.pos.key(), ply);
-        if ply > 0 {
+        if ply > 0 && !excluded {
             if let Some(ref h) = tt_hit {
                 if h.depth >= depth {
                     match h.bound {
@@ -457,8 +468,10 @@ impl<E: Evaluator> SearchThread<E> {
         let improving = self.improving(ply);
         // reverse futility: shallow node already beating beta by a margin.
         // Guards: not in a mate/mated search (beta/static_eval in non-mate
-        // range only) so we never truncate forced-mate lines.
+        // range only) so we never truncate forced-mate lines; not while
+        // verifying singularity (the excluded node is a different search).
         if ply > 0
+            && !excluded
             && !in_check
             && depth <= 6
             && beta.abs() < MATE_BOUND
@@ -475,6 +488,7 @@ impl<E: Evaluator> SearchThread<E> {
         // (illegal), consecutive nulls (infinite recursion), pawn-only
         // material (zugzwang), eval below beta (no margin to give away).
         if ply > 0
+            && !excluded
             && !in_check
             && depth >= 3
             && static_eval >= beta
@@ -493,6 +507,38 @@ impl<E: Evaluator> SearchThread<E> {
             if score >= beta {
                 // never return unproven mate scores from a null search
                 return if score >= MATE_BOUND { beta } else { score };
+            }
+        }
+
+        // Singular extension: if the TT move is (by a sufficient prior search)
+        // the clearly-best move, verify that ALL other moves fail low against a
+        // reduced beta `s_beta`. If so, the TT move is "singular" — extend it by
+        // a ply (it carries the line; deepening it is cheap insurance).
+        //
+        // The verification is a reduced-depth, zero-width search at the SAME ply
+        // with `excluded_move` set so the TT move itself is skipped. It must NOT
+        // re-enter this block (infinite recursion): the `!excluded` guard below
+        // is exactly that gate — inside the verification, `excluded` is true.
+        let mut singular_ext = 0;
+        if !excluded && ply > 0 && depth >= 8 {
+            if let Some(ref h) = tt_hit {
+                if h.depth >= depth - 3
+                    && matches!(h.bound, tt::Bound::Lower | tt::Bound::Exact)
+                    && h.score.abs() < MATE_BOUND
+                    && h.mv != Move::NULL
+                {
+                    let tt_mv = h.mv;
+                    let s_beta = (h.score - 2 * depth).max(-MATE_BOUND + 1);
+                    self.stack[ply].excluded_move = tt_mv;
+                    let s = self.negamax((depth - 1) / 2, s_beta - 1, s_beta, ply);
+                    self.stack[ply].excluded_move = Move::NULL;
+                    if self.stopped {
+                        return 0;
+                    }
+                    if s < s_beta {
+                        singular_ext = 1; // only the TT move is above s_beta
+                    }
+                }
             }
         }
 
@@ -536,6 +582,11 @@ impl<E: Evaluator> SearchThread<E> {
         let mut tried_quiets: [(Move, PieceType); 64] = [(Move::NULL, PieceType::Pawn); 64];
         let mut tried_quiet_count = 0usize;
         while let Some(mv) = picker.next() {
+            // Singular verification skips the TT move (proving the OTHERS fail
+            // low). NULL excluded_move never matches a generated move.
+            if mv == self.stack[ply].excluded_move {
+                continue;
+            }
             // futility: at very shallow depth with a hopeless eval, quiet moves
             // can't recover. depth <= 2 only: deeper skips break sacrificial
             // combinations (WAC canary 268->257, attributed by A/B 2026-06-05)
@@ -556,11 +607,30 @@ impl<E: Evaluator> SearchThread<E> {
                 tried_quiets[tried_quiet_count] = (mv, moved_piece);
                 tried_quiet_count += 1;
             }
+            // Extensions (composed, capped at +1 per move so a singular move
+            // that also checks does not double-extend):
+            //  - check extension: gives_check is free post-make in our
+            //    legality-by-rollback flow (the new stm is in check iff the
+            //    move we just made gives check).
+            //  - singular extension: only the verified TT move earns it.
+            // Guard: an illegal GUI FEN can let us capture the enemy king
+            // (QxK); the new stm then has no king and `in_check` would index
+            // an empty king-square. No king = no check; the child returns a
+            // mate-class score via its own missing-king guard.
+            let gives_check = !self
+                .pos
+                .piece_bb(self.pos.stm(), PieceType::King)
+                .is_empty()
+                && self.pos.in_check(self.pos.stm());
+            let this_singular = if mv == tt_move { singular_ext } else { 0 };
+            let ext = (i32::from(gives_check) + this_singular).min(1);
             let score = if first {
-                -self.negamax(depth - 1, -beta, -alpha, ply + 1)
+                -self.negamax(depth - 1 + ext, -beta, -alpha, ply + 1)
             } else {
                 // LMR: late quiets get a reduced-depth scout; surprises get
-                // re-searched at full depth before the full-window re-search
+                // re-searched at full depth before the full-window re-search.
+                // Extension and reduction compose: reduced scout depth is
+                // `depth - 1 + ext - r`.
                 let mut r = 0;
                 if !in_check && !mv.is_capture() && !mv.is_promotion() {
                     quiet_count += 1;
@@ -569,12 +639,12 @@ impl<E: Evaluator> SearchThread<E> {
                         r = 1 + i32::from(quiet_count >= 8) + i32::from(depth >= 8);
                     }
                 }
-                let mut zw = -self.negamax(depth - 1 - r, -alpha - 1, -alpha, ply + 1);
+                let mut zw = -self.negamax(depth - 1 + ext - r, -alpha - 1, -alpha, ply + 1);
                 if r > 0 && zw > alpha && !self.stopped {
-                    zw = -self.negamax(depth - 1, -alpha - 1, -alpha, ply + 1);
+                    zw = -self.negamax(depth - 1 + ext, -alpha - 1, -alpha, ply + 1);
                 }
                 if zw > alpha && zw < beta && !self.stopped {
-                    -self.negamax(depth - 1, -beta, -alpha, ply + 1)
+                    -self.negamax(depth - 1 + ext, -beta, -alpha, ply + 1)
                 } else {
                     zw
                 }
@@ -666,22 +736,28 @@ impl<E: Evaluator> SearchThread<E> {
             };
         }
 
-        let bound = if best >= beta {
-            tt::Bound::Lower // the stored move is the cutoff move
-        } else if best_move != Move::NULL {
-            tt::Bound::Exact
-        } else {
-            tt::Bound::Upper // failed low: no move raised alpha
-        };
-        self.tt.store(
-            self.pos.key(),
-            best_move,
-            best,
-            static_eval,
-            depth,
-            bound,
-            ply,
-        );
+        // Do not store during a singular verification: `best` describes the
+        // node MINUS the excluded TT move, so it must not overwrite the real
+        // entry (that would corrupt later probes of this key — the TT-pollution
+        // hazard the exclusion plumbing exists to prevent).
+        if !excluded {
+            let bound = if best >= beta {
+                tt::Bound::Lower // the stored move is the cutoff move
+            } else if best_move != Move::NULL {
+                tt::Bound::Exact
+            } else {
+                tt::Bound::Upper // failed low: no move raised alpha
+            };
+            self.tt.store(
+                self.pos.key(),
+                best_move,
+                best,
+                static_eval,
+                depth,
+                bound,
+                ply,
+            );
+        }
         best
     }
 
@@ -1145,5 +1221,99 @@ mod tests {
             c2 < 0,
             "cont_hist2 malus on tried-but-failed quiet (got {c2})"
         );
+    }
+
+    // --- Task 7: singular + check extensions ---
+
+    /// A deep search on a complex middlegame must terminate quickly: this is the
+    /// no-infinite-recursion guard for singular extensions (the verification
+    /// search recurses at the SAME ply; if its `excluded_move == NULL` gate
+    /// failed it would re-enter forever). depth 12 hits the `depth >= 8`
+    /// singular condition repeatedly along the tree.
+    #[test]
+    fn deep_search_with_extensions_terminates() {
+        use crate::eval::Hce;
+        let pos = Position::from_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        )
+        .unwrap();
+        let mut st = SearchThread::new(pos, Hce::new());
+        let start = std::time::Instant::now();
+        let (best, score) = st.search_to_depth(12);
+        // wall-clock fuse: a re-entry bug shows as a hang, not a wrong answer.
+        assert!(
+            start.elapsed().as_secs() < 30,
+            "depth-12 search ran away (singular re-entry?)"
+        );
+        assert!(best.is_some(), "a legal move was returned");
+        assert!(
+            score.abs() < MATE_BOUND,
+            "non-mate eval is finite, got {score}"
+        );
+    }
+
+    /// Singularity smoke (behavioral, not white-box): prime a tactical position
+    /// to depth 8 (fills the TT move that the singular block reads), then the
+    /// next, deeper iteration on the warm TT must keep returning a sane move and
+    /// an in-window score. The extensions must not destabilize the PV.
+    #[test]
+    fn singular_extension_keeps_best_move_stable() {
+        use crate::eval::Hce;
+        // WAC.288: Nf6+ is the dominant move (a forcing fork) — a natural
+        // singular/check candidate.
+        let pos =
+            Position::from_fen("r1b2rk1/p4ppp/1p1Qp3/4P2N/1P6/8/P3qPPP/3R1RK1 w - - 0 1").unwrap();
+        let mut st = SearchThread::new(pos, Hce::new());
+        let (best8, _score8) = st.search_to_depth(8);
+        let best8 = best8.expect("depth 8 returns a move");
+        // deeper iteration on the SAME warm thread (TT primed with the move the
+        // singular block consults):
+        let (best9, score9) = st.search_to_depth(9);
+        let best9 = best9.expect("depth 9 returns a move");
+        assert_eq!(
+            best9.to_string(),
+            best8.to_string(),
+            "best move stable across the extension-bearing deeper iteration"
+        );
+        assert!(
+            score9.abs() <= MATE,
+            "score is a real eval or a real mate, got {score9}"
+        );
+    }
+
+    /// TT-pollution guard: a singular VERIFICATION search (run at the same ply
+    /// with `excluded_move` set) must NOT overwrite the real TT entry for the
+    /// node's key — its `best` describes the node minus the excluded move.
+    /// Reproduce the exact verification call the search makes and assert the
+    /// root entry is byte-identical afterwards.
+    #[test]
+    fn singular_verification_does_not_pollute_tt() {
+        use crate::eval::Hce;
+        let pos =
+            Position::from_fen("r1b2rk1/p4ppp/1p1Qp3/4P2N/1P6/8/P3qPPP/3R1RK1 w - - 0 1").unwrap();
+        let key = pos.key();
+        let mut st = SearchThread::new(pos, Hce::new());
+        // Prime the TT with the real depth-8 entry for the root key.
+        st.search_to_depth(8);
+        let before = st.tt.probe(key, 0).expect("root primed in TT");
+        let (bmv, bscore, bdepth, bbound) = (before.mv, before.score, before.depth, before.bound);
+        assert_ne!(bmv, Move::NULL, "primed entry carries the TT move");
+
+        // Reproduce the verification: same ply, reduced depth, zero-width window
+        // around s_beta, with the TT move excluded. eval must be refreshed so
+        // the incremental Hce accumulator matches the root (search_to_depth did
+        // that, and we did not move).
+        st.eval.refresh(&st.pos);
+        let depth = 8;
+        let s_beta = (bscore - 2 * depth).max(-MATE_BOUND + 1);
+        st.stack[0].excluded_move = bmv;
+        let _ = st.negamax((depth - 1) / 2, s_beta - 1, s_beta, 0);
+        st.stack[0].excluded_move = Move::NULL;
+
+        let after = st.tt.probe(key, 0).expect("root entry still present");
+        assert_eq!(after.mv, bmv, "TT move unchanged by verification");
+        assert_eq!(after.score, bscore, "TT score unchanged by verification");
+        assert_eq!(after.depth, bdepth, "TT depth unchanged by verification");
+        assert_eq!(after.bound, bbound, "TT bound unchanged by verification");
     }
 }
