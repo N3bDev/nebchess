@@ -16,7 +16,8 @@
 # (Stash25 2934, Koivisto 2907, Weiss 2898). The Stash v19/v20/v21 spine stays
 # so deltas vs v0.5.0 remain interpretable; Stash25 brackets from above.
 #
-# RATINGS ARE CCRL BLITZ (40/2) POINTS, list COMPUTED 2025-12-20. Source: the
+# RATINGS ARE CCRL BLITZ (40/2) POINTS (1-CPU list — matches the gauntlet's
+# Threads=1), list COMPUTED 2025-12-20. Source: the
 # live list at computerchess.org.uk/ccrl/404/ is bot-protected (403/curl); the
 # 40/2 complete-list snapshot was read from web.archive.org (label "Back to CCRL
 # 40/2", "Computed on December 20, 2025 with Bayeselo"). Spine pins refreshed
