@@ -30,3 +30,4 @@ the previous entry is a stop-and-investigate signal.
 | 2026-06-07 | singular + check extensions @ dd9143c | 276/299 | **+3 — PROJECT HIGH**: forcing-line extensions are pure WAC fuel; prediction verified (unlike the M5 king-safety expectation) |
 | 2026-06-07 | futility v2 (d<=4 + gives_check) @ 384143f | 272/299 | **THE IOU PAYS: −1 vs the unguarded M4 variant's −11** — the gives_check guard was the missing piece exactly as the incident attribution said; watch gate passed |
 | 2026-06-07 | **v0.6.0 ship state** @ 650bf84 | 273/299 | M6a trend: 268→271 (SEE)→273 (conthist)→276 (ext, reverted)→272 (fut-v2, reverted)→**273 ship** (+5 over the 0.5.0 ship state; two all-time-high features reverted on SPRT evidence — the suite measures tactics, the gates measure chess) |
+| 2026-06-07 | TimeBrain gate 1 @ ba544b8 | 272/299 | ±1 expected (TM is inert at fixed movetime — canary just confirms no collateral search damage); the real test is SPRT at 8+0.08 |
