@@ -51,9 +51,10 @@ challenge:                  # which incoming challenges to auto-accept
 
 matchmaking:                 # the bot seeks out and challenges other bots
   allow_matchmaking: true    # requires the token to also have the challenge:write scope
+  allow_during_games: true   # keep issuing challenges while games run (fills concurrency)
   challenge_variant: "standard"
   challenge_mode: "rated"    # play rated games so the bot establishes a real rating
-  challenge_timeout: 5       # minutes idle before creating a new challenge
+  challenge_timeout: 1       # minutes idle before creating a new challenge (1 = min)
   opponent_rating_difference: 300  # only challenge bots within +/- 300 of our rating
   rating_preference: "none"
   # Default spec = 5+3. On each challenge lichess-bot randomly picks either this
@@ -73,3 +74,7 @@ matchmaking:                 # the bot seeks out and challenges other bots
 greeting:
   hello: "Hi! I'm NebChess, a from-scratch Rust engine. gl hf!"
   goodbye: "Thanks for the game!"
+
+# Save every finished game to disk for collection/feedback.
+pgn_directory: "games"        # PGNs written under lichess-bot/games/
+pgn_file_grouping: "all"      # one combined file (easier to feed back); "game" = one file each
