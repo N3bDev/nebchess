@@ -1,5 +1,16 @@
 # TimeBrain-V2 Implementation Plan (Plan 8 / M7)
 
+> ⚠️ **DE-SCOPED 2026-06-08 after Task 2.** The Task-2 gate (hard cap 5×→2×)
+> came back **H0: −55.6 ±23.3 at 8+0.08** and was reverted (`6f02bea`). The gate
+> revealed the lever was wrong AND that NebChess is **time-elastic** (more time
+> per move = genuinely stronger), so "bank time by spending less" trades away
+> real strength — the clock leak is partly inherent to a time-elastic HCE engine.
+> Per the user's call, TimeBrain-V2 is abandoned in favor of **NNUE (M8)**, the
+> ceiling + robustness lever for the 3000+ goal. Tasks 3–6 below were NOT
+> executed. The T1 head-to-head harness (`tools/timebrain-h2h.sh`) is kept for
+> any future TM work. See `docs/sprt-log.md` (2026-06-08 row) and
+> `docs/field-analysis-071.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop NebChess from burning its live-blitz clock too fast — so it reaches the deciding phase of a game with time to think instead of on the increment.
