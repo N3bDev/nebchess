@@ -86,6 +86,20 @@ fn fifty_move_draw_scored_in_search() {
 }
 
 #[test]
+fn insufficient_material_kbvk_scores_draw_not_a_bishop() {
+    // field-analysis-050 blindspot: K+B-v-K is a dead draw, but the old eval
+    // summed the bishop's material and held ~+330–400 (and *more depth made it
+    // worse*). With the insufficient-material draw rule the search must now
+    // return ~0. This test FAILS on the pre-fix eval by a wide margin.
+    let mut st = searcher("8/8/8/4k3/8/8/2B5/4K3 w - - 0 1");
+    let (_best, score) = st.search_to_depth(6);
+    assert!(
+        score.abs() <= 10,
+        "K+B-v-K must score as a draw (≈0), got {score}"
+    );
+}
+
+#[test]
 fn en_prise_king_fen_does_not_panic() {
     // ILLEGAL input position (black king already capturable, white to move):
     // GUIs can send such FENs; the engine must not crash and should report

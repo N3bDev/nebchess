@@ -18,6 +18,10 @@ ROUNDS=$(( GAMES / 2 ))
 CONCURRENCY=$(( $(nproc) - 1 ))
 [[ $CONCURRENCY -lt 1 ]] && CONCURRENCY=1
 
+# Optional NebChess UCI options (e.g. a deploy-config run with book+TB):
+#   NEB_OPTS="option.BookFile=... option.SyzygyPath=..." tools/anchored-gauntlet.sh 300
+# Empty by default → the canonical pure-engine measurement (book/TB off).
+NEB_OPTS="${NEB_OPTS:-}"
 NEBCHESS="$(realpath ../target/release/nebchess)"
 FASTCHESS="$(realpath bin/fastchess)"
 ORDO="$(realpath bin/ordo)"
@@ -63,6 +67,9 @@ while IFS=' ' read -r anchor_name _rating; do
         Stash19)      anchor_bin="$ANCHOR_DIR/stash-19.1-linux-x86_64" ;;
         Stash20)      anchor_bin="$ANCHOR_DIR/stash-20.0.1-linux-x86_64" ;;
         Stash21)      anchor_bin="$ANCHOR_DIR/stash-21.2-linux-x86_64" ;;
+        Stash25)      anchor_bin="$ANCHOR_DIR/stash-25.0-linux-x86_64" ;;
+        Weiss10)      anchor_bin="$ANCHOR_DIR/weiss-1.0-linux-x86_64" ;;
+        Koivisto20)   anchor_bin="$ANCHOR_DIR/koivisto-2.0-linux-x86_64" ;;
         *)
             # Generic fallback: try a lowercase name match in anchor dir
             anchor_bin=$(find "$ANCHOR_DIR" -maxdepth 1 -type f -iname "*${anchor_name,,}*" | head -1 || true)
@@ -83,7 +90,7 @@ while IFS=' ' read -r anchor_name _rating; do
     echo "    pgn    : tools/$PGN_OUT"
 
     "$FASTCHESS" \
-        -engine cmd="$NEBCHESS" name=nebchess \
+        -engine cmd="$NEBCHESS" name=nebchess $NEB_OPTS \
         -engine cmd="$anchor_bin" name="$anchor_name" \
         -each tc=10+0.1 option.Hash=16 option.Threads=1 \
         -openings file="$BOOK" format=pgn order=random \

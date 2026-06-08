@@ -1,6 +1,6 @@
 # NebChess
 
-A from-scratch UCI chess engine in Rust, targeting 2400 CCRL Blitz.
+A from-scratch UCI chess engine in Rust. Measured **2827 ± 16** (10+0.1, anchored vs a 3-family pool, engine-default config — book/Syzygy are live-deploy multipliers on top; see docs/strength-log.md for caveats). **M6 target: 2900 (stretch 3000).**
 
 Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/superpowers/specs/2026-06-04-nebchess-engine-design.md)
 
@@ -12,7 +12,9 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M3: transposition table + move ordering + PVS
 - [x] M4: search pruning (null move, LMR, aspiration) + PST tuning pipeline
 - [x] M5: full HCE evaluation + Texel tuning at scale
-- [ ] M6: search & eval polish + bot readiness (book, Syzygy, time management, Lichess hardening)
+- [x] M6a: bracketed measurement + search polish (SEE, conthist; LMR/extensions/futility-v2 honestly H0'd)
+- [x] M6b: TimeBrain + bot readiness (book, Syzygy, pondering, Lichess hardening)
+- [ ] M7: eval round 2 (outposts, king-attack rework, gated check extensions) + deeper-search retries (singular, futility v2) + TimeBrain-v2 (Lichess-tuned) + desktop migration
 
 ## Play against it
 

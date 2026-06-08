@@ -1,0 +1,11 @@
+2rr3k/pp3pp1/1nnqbN1p/3pN3/2pP4/2P3Q1/PPB4P/R4RK1 w - - bm Qg6; id "SAC.000"; c0 "WAC.001 anchor (Greek-gift-class queen sac for mate, SEE-900); engine SOLVES at 2s — present as a positive control for the suite";
+6k1/2p2p2/P2p3p/2b1q1p1/2Q1B1P1/5P1K/5r2/7R b - - bm h5; id "SAC.001"; c0 "corpus g7 (vs Q_K_V) move 32; pawn-break sac (SEE-100), engine 10s=+319 d22; line gxh5 Qf4 Bxh7+ Kxh7 — deflection motif the GAME missed";
+r4rk1/p1p2ppp/Q2b4/3p4/P1nP4/2P2NPq/4PP1P/R1B2RK1 w - - bm e4; id "SAC.002"; c0 "corpus g23 (vs SoloBot) move 16; central pawn sac e4 (SEE-100), engine 10s=+76 d18; the game played a passive knight retreat instead";
+r4rk1/p5p1/2pb4/3p3p/P2Q2nq/2N4P/1PP1RPP1/R1B3K1 w - - bm Nxd5; id "SAC.003"; c0 "corpus g29 (vs ImranMelikovBot) move 18; Nxd5 piece-for-pawn sac (SEE-120), engine 10s=+72 d17; game declined the entrance";
+8/7p/5k2/5p2/p1p2P2/Pr1pPK2/1P1R3P/8 b - - bm Rxb2; id "SAC.004"; c0 "WAC.002 (exchange sac Rxb2, SEE-400); NebChess MISSES at 2s (plays c4c3, +176) — pad, provenance WAC";
+r3r1k1/pp1q1pp1/4b1p1/3p2B1/3Q1R2/8/PPP3PP/4R1K1 w - - bm Qxg7+; id "SAC.005"; c0 "WAC.055 (queen sac Qxg7+, SEE-800); NebChess MISSES at 2s (plays Qf2, -110) — pad, provenance WAC";
+5rk1/2p4p/2p4r/3P4/4p1b1/1Q2NqPp/PP3P1K/R4R2 b - - bm Qg2+; id "SAC.006"; c0 "WAC.163 (queen sac Qg2+ for mate, SEE-580); NebChess MISSES at 2s (plays Bxd5?, +19) — pad, provenance WAC";
+1r1rb1k1/2p3pp/p2q1p2/3PpP1Q/Pp1bP2N/1B5R/1P4PP/2B4K w - - bm Qxh7+; id "SAC.007"; c0 "WAC.185 — the GREEK GIFT motif (Qxh7+ then Ng5, SEE-800); NebChess MISSES at 2s (plays Ng6, -31) — the spec's user-reported pattern; pad, provenance WAC";
+r1bq2kr/p1pp1ppp/1pn1p3/4P3/2Pb2Q1/BR6/P4PPP/3K1BNR w - - bm Qxg7+; id "SAC.008"; c0 "WAC.207 (queen sac Qxg7+, SEE-800); NebChess MISSES BADLY at 2s (plays Nf3, evaluates -256 — thinks it is losing) — pad, provenance WAC";
+3r1r1k/1b4pp/ppn1p3/4Pp1R/Pn5P/3P4/4QP2/1qB1NKR1 w - - bm Rxh7+; id "SAC.009"; c0 "WAC.213 (rook sac Rxh7+, SEE-400); NebChess MISSES BADLY at 2s (plays Rb2, -654) — pad, provenance WAC";
+3r1rk1/p3qp1p/2bb2p1/2p5/3P4/1P6/PBQN1PPP/2R2RK1 b - - bm Bxg2 Bxh2+; id "SAC.010"; c0 "WAC.297 (bishop sac Bxg2 / Bxh2+, SEE-230); NebChess MISSES at 2s (plays Re8, -22) — pad, provenance WAC";

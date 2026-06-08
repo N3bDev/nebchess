@@ -3,6 +3,7 @@
 /tools/books/
 /tools/suites/
 /tools/data/
+/tools/tb/
 *.bin
 __pycache__/
 .claude/

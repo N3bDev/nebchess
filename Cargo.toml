@@ -1,10 +1,16 @@
 [package]
 name = "nebchess"
-version = "0.5.0"
+version = "0.7.0"
 edition = "2021"
 description = "A from-scratch UCI chess engine targeting 2400 CCRL Blitz"
 repository = "https://github.com/N3bDev/nebchess"
 license = "MIT"
+
+[dependencies]
+# The project's single external dependency — spec M8 decision; std-only
+# otherwise. Exact-pinned: a Syzygy probe library must not silently change
+# behavior under us. Pure-Rust port of Fathom (links only against libc).
+pyrrhic-rs = "=0.2.0"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -564,6 +564,13 @@ impl Evaluator for Hce {
     fn on_unmake(&mut self, _mv: Move, _pos: &Position) {}
 
     fn evaluate(&mut self, pos: &Position) -> i32 {
+        // Insufficient-material draw: KvK / KNvK / KBvK (and mirrors) can never
+        // be won — score them dead level before any material is summed
+        // (field-analysis-050: the KBvK +4.2 blindspot). Side-to-move-relative
+        // 0 is correct for a draw from either side.
+        if pos.is_insufficient_material() {
+            return 0;
+        }
         let ph = phase(pos);
         // Non-pawn material/PST computed fresh; pawn structure via hash.
         let (np_mg, np_eg) = eval_non_pawn_terms(pos);
