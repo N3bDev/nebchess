@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Zero-time-forfeit acceptance gauntlet (spec §5.4, §12 M2 gate).
-# A single time loss is a BLOCKER bug, not noise. Usage: forfeit-gauntlet.sh [rounds=100]
+# A single time loss is a BLOCKER bug, not noise. Usage: forfeit-gauntlet.sh [rounds=100] [tc=8+0.08]
 set -euo pipefail
 cd "$(dirname "$0")"
 ROUNDS="${1:-100}"
+TC="${2:-8+0.08}"
 ENGINE="$(realpath ../target/release/nebchess)"
 rm -f gauntlet.pgn
 bin/fastchess \
   -engine cmd="$ENGINE" name=new -engine cmd="$ENGINE" name=old \
-  -each tc=8+0.08 option.Hash=16 option.Threads=1 \
+  -each tc="$TC" option.Hash=16 option.Threads=1 \
   -openings file=books/8moves_v3.pgn format=pgn order=random \
   -rounds "$ROUNDS" -repeat -concurrency "$(( $(nproc) - 1 ))" -recover \
   -draw movenumber=40 movecount=8 score=10 \
