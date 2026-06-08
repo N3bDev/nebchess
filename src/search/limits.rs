@@ -4,8 +4,7 @@
 //! between iterations. Allocation reserves an emergency clock buffer (flag
 //! protection), scales the soft deadline by best-move stability (stop early
 //! when the PV is settled, spend longer right after it changes), and caps any
-//! single move at HARD_CAP_MULT× the soft target (or a third of the usable
-//! clock, whichever is smaller). The search tree is unchanged —
+//! single move at a third of the usable clock. The search tree is unchanged —
 //! only WHEN we stop between iterations moves.
 //!
 //! The Gate 2 adaptive layer (panic extension + clock catch-up; won-fast was
@@ -33,12 +32,6 @@ pub struct Limits {
 /// Smallest emergency reserve we will ever hold back (ms) — even on a near-flag
 /// clock, leave this so a move can physically be transmitted.
 pub const RESERVE_MIN_MS: u64 = 50;
-/// Per-move hard ceiling as a multiple of the base soft target. TimeBrain v2:
-/// 2× (was 5×). The wide 5× cap let one complex middlegame move eat ~38 s at
-/// 180+2 and drained the live-blitz clock into the increment by move ~30
-/// (docs/field-analysis-071.md). Peer engine cutecassia caps at 1.5×; modern
-/// engines sit ~2×.
-pub const HARD_CAP_MULT: u64 = 2;
 
 pub struct TimeManager {
     start: Instant,
@@ -77,7 +70,7 @@ impl TimeManager {
                     // reserve = emergency buffer (flag protection)
                     // usable  = what this whole game-phase may consume
                     // soft    = the per-move base target (movestogo + a slice of inc)
-                    // hard    = one-move ceiling: HARD_CAP_MULT×soft, capped at a third of usable
+                    // hard    = the absolute one-move ceiling (a third of usable)
                     let avail = time.saturating_sub(overhead_ms).max(1);
                     let reserve = (avail / 16).clamp(RESERVE_MIN_MS, 2_000);
                     let usable = avail.saturating_sub(reserve).max(1);
@@ -87,7 +80,7 @@ impl TimeManager {
                     let third = (usable / 3).max(1);
                     let mtg = u64::from(limits.movestogo.unwrap_or(30).clamp(1, 40));
                     let soft = (usable / mtg + inc * 3 / 4).clamp(1, third);
-                    let hard = (soft * HARD_CAP_MULT).min(third).max(soft);
+                    let hard = (soft * 5).min(third).max(soft);
                     (Some(soft), Some(hard))
                 }
             }
@@ -234,10 +227,9 @@ mod tests {
             (1_500..=2_500).contains(&soft),
             "soft ~ usable/30, got {soft}"
         );
-        // TimeBrain v2: hard is soft*HARD_CAP_MULT (=2) capped at usable/3 (was
-        // soft*5). 60s no-inc => usable/3 ~ 19_330, so the soft*HARD_CAP_MULT
-        // term wins and the cap is soft*HARD_CAP_MULT.
-        assert_eq!(hard, soft * HARD_CAP_MULT);
+        // TimeBrain Gate 1: hard is soft*5 capped at usable/3 (was soft*4).
+        // 60s no-inc => usable/3 ~ 19_330, so the soft*5 term (9_665) wins.
+        assert_eq!(hard, soft * 5);
         // black's clock must be read for black
         let l = Limits {
             btime: Some(30_000),
