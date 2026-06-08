@@ -11,11 +11,19 @@ engine:
   dir: "./engines"          # directory containing the engine binary
   name: "nebchess"          # binary filename in ./engines
   protocol: "uci"           # NebChess speaks UCI
-  ponder: false             # single-threaded engine; pondering buys little
+  ponder: true              # 0.7.0 supports pondering; thinks on the opponent's
+                            # clock (keeps one core busy continuously)
   uci_options:
-    Hash: 256               # transposition table MB (engine allows 1-4096)
-    Move Overhead: 200      # ms; higher than the LAN default to absorb cloud RTT
-    Threads: 1              # NebChess is single-threaded (option is inert)
+    Hash: 4096              # transposition table MB (engine max). Fine on a 32GB
+                            # box; drop to 256 on a small cloud VM.
+    Move Overhead: 100      # ms; covers the Lichess network round-trip
+    Threads: 1              # NebChess is single-threaded (Lazy SMP is a later milestone)
+    BookDepth: 16           # book answers the first 16 plies, then searches
+    # --- Data artifacts: place these next to the engine in ./engines, then ---
+    # --- uncomment. Fetch with tools/download-book.sh + download-syzygy.sh. ---
+    # Use absolute paths if the engine can't resolve these relative ones.
+    BookFile: "./engines/nebbook.bin"   # PolyGlot book (~5MB) from the v0.7.0 release
+    SyzygyPath: "./engines/tb"          # 3-4-5 Syzygy tables dir (~1GB)
 
 # lichess-bot-side safety margins / timing.
 abort_time: 20              # seconds: abort a game if the opponent never moves

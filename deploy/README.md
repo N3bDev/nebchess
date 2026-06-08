@@ -8,7 +8,56 @@ The whole flow is doable **from a phone** — no local machine, terminal, or
 `docker`/`curl` required. Railway builds the image from this repo and runs it
 always-on; the engine itself needs no changes.
 
-## What's here
+There are two ways to run it:
+- **[Run locally (WSL Ubuntu)](#run-locally-wsl-ubuntu)** — recommended for a strong
+  desktop; full control, big hash, book + Syzygy, pondering.
+- **Cloud (Railway)** — always-on, phone-deployable; see the rest of this doc.
+
+## Run locally (WSL Ubuntu)
+
+A native run (no Docker) on a beefy box, with every 0.7.0 feature on. Replace
+`nebchessbot` references with your bot account.
+
+```bash
+# 0. Prereqs (once)
+sudo apt update && sudo apt install -y curl git unzip python3 python3-venv build-essential
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y   # Rust
+source "$HOME/.cargo/env"
+
+# 1. NebChess: clone this branch, build, fetch the book + Syzygy tables
+git clone -b claude/lichess-bot-deployment-3lfRU https://github.com/N3bDev/nebchess.git ~/nebchess
+cd ~/nebchess
+cargo build --release                 # -> target/release/nebchess
+tools/download-book.sh                 # -> tools/books/nebbook.bin (~5MB, from the v0.7.0 release)
+tools/download-syzygy.sh              # -> tools/tb/ (~1GB, 3-4-5 tables)
+printf 'uci\nquit\n' | ./target/release/nebchess | grep -E 'id name|uciok'   # sanity
+
+# 2. lichess-bot: clone, install deps, drop the engine + artifacts in engines/
+git clone https://github.com/lichess-bot-devs/lichess-bot.git ~/lichess-bot
+cd ~/lichess-bot
+pip install -r requirements.txt        # add --break-system-packages if PEP-668 blocks it
+mkdir -p engines/tb
+cp ~/nebchess/target/release/nebchess engines/nebchess
+cp ~/nebchess/tools/books/nebbook.bin engines/nebbook.bin
+cp ~/nebchess/tools/tb/* engines/tb/
+
+# 3. Config + token, then run
+cp ~/nebchess/deploy/config.yml config.yml      # already set for book/Syzygy/ponder/Hash 4096
+export LICHESS_BOT_TOKEN=lip_xxxxxxxxxxxx        # your bot token (bot:play [+ challenge:write])
+python3 lichess-bot.py -u                        # -u upgrades the account on first run
+```
+
+The shipped `config.yml` already points `BookFile`/`SyzygyPath` at `./engines/...`,
+which is where step 2 copies them. If the engine logs that it can't find them, use
+absolute paths (e.g. `/home/<you>/lichess-bot/engines/nebbook.bin`).
+
+**Note on "cranking it up":** the engine is **single-threaded** (`Threads` maxes at
+1; Lazy SMP is a later milestone), so a 24-core CPU can't be parallelised yet — but
+its fast single-core throughput plus `Hash 4096`, the book, Syzygy, and pondering
+make it as strong as 0.7.0 gets. Longer time controls (rapid/classical) let it
+search deeper and play better, too.
+
+## What's here (cloud / Railway)
 
 | File | What it does |
 |------|--------------|
