@@ -43,3 +43,11 @@ The engine is sound across blitz and rapid (180+2 / 300+3 are the tested field T
 3. Set `Hash 256`, `Move Overhead 100`.
 4. Smoke a game offline: `tools/krk-stress.sh` (KR-K conversion) + `tools/uci-torture.sh` (robustness) both green.
 5. Start lichess-bot; watch the first few games for time usage (the `info string time soft=.. hard=.. used=..` line reports per-move allocation).
+
+## Forfeit battery (T6, 2026-06-07)
+
+TimeBrain v1 forfeit-clean across the live TC spectrum — **zero NebChess time forfeits**:
+`60+0` SD (120 games, the no-increment reserve stress) · `180+2` (60) · `300+3` (60).
+Plus the always-on `8+0.08` SPRT/gauntlet history (0 forfeits over thousands of games)
+and the UCI torture battery (`tools/uci-torture.sh`, 20/20: hostile FENs, illegal
+moves, zero/negative clocks, stop-storms, mid-search disconnects — no panic/hang).
