@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::board::movegen::find_uci_move;
-use crate::board::{Color, Position};
+use crate::board::{Color, Move, Position};
 use crate::book::Book;
 use crate::eval::Hce;
 use crate::search::limits::{Limits, TimeManager};
@@ -402,7 +402,18 @@ impl Uci {
         // clear races with a GUI 'stop' arriving right after 'go'
         self.stop.store(false, Ordering::Relaxed);
         self.search = Some(std::thread::spawn(move || {
-            let best = st.iterate(&limits, print_info);
+            // Capture the 2nd PV move (the predicted opponent reply) as we go.
+            // UCI pondering is GUI-driven: the GUI only starts a `go ponder`
+            // search if our bestmove line names the move to ponder on
+            // (`bestmove <best> ponder <reply>`). Without this the engine's
+            // ponder handling is unreachable in a real GUI.
+            let mut ponder_move: Option<Move> = None;
+            let best = st.iterate(&limits, |info| {
+                if let Some(&pm) = info.pv.get(1) {
+                    ponder_move = Some(pm);
+                }
+                print_info(info);
+            });
             // Move-time telemetry (ungated, one line per move): budgeted soft/
             // hard vs ms actually spent — the clock-collapse field instrument.
             let (soft, hard, used) = st.last_move_time();
@@ -413,7 +424,12 @@ impl Uci {
                 fmt(hard)
             );
             match best {
-                Some(mv) => println!("bestmove {mv}"),
+                // Append the ponder move when we have a predicted reply (2nd PV
+                // move) — this is what makes the GUI issue `go ponder`.
+                Some(mv) => match ponder_move {
+                    Some(pm) => println!("bestmove {mv} ponder {pm}"),
+                    None => println!("bestmove {mv}"),
+                },
                 None => println!("bestmove 0000"), // no legal moves on board
             }
             io::stdout().flush().ok();

@@ -139,6 +139,49 @@ fn go_then_immediate_stop_still_gives_legal_bestmove() {
 }
 
 #[test]
+fn bestmove_advertises_ponder_move() {
+    // UCI pondering is GUI-driven: the engine must name the predicted reply
+    // (`bestmove <best> ponder <reply>`) or the GUI never issues `go ponder`.
+    // The ponder move is the 2nd PV move and must be legal after the bestmove.
+    let mut e = Engine::start();
+    e.send("position startpos moves d2d4 g8f6 c2c4 e7e6 g1f3 d7d5");
+    e.send("go depth 10");
+    let line = e.expect_line(|l| l.starts_with("bestmove"));
+    let parts: Vec<&str> = line.split(' ').collect();
+    assert_eq!(
+        parts.len(),
+        4,
+        "expected `bestmove X ponder Y`, got {line:?}"
+    );
+    assert_eq!(parts[2], "ponder", "3rd token must be `ponder`: {line:?}");
+    // the ponder move must be legal in the position after the bestmove
+    let mut pos = Position::startpos();
+    for m in ["d2d4", "g8f6", "c2c4", "e7e6", "g1f3", "d7d5", parts[1]] {
+        let mv = find_uci_move(&pos, m).expect("legal move");
+        pos.make(mv);
+    }
+    assert!(
+        find_uci_move(&pos, parts[3]).is_some(),
+        "ponder move {} illegal after bestmove {}",
+        parts[3],
+        parts[1]
+    );
+}
+
+#[test]
+fn mate_in_one_bestmove_has_no_ponder() {
+    // A single-move PV (mate ends the line) → bare bestmove, no ponder token.
+    let mut e = Engine::start();
+    e.send("position fen 6k1/5ppp/8/8/8/8/8/R6K w - - 0 1");
+    e.send("go depth 6");
+    let line = e.expect_line(|l| l.starts_with("bestmove"));
+    assert!(
+        !line.contains(" ponder "),
+        "mate-in-1 should emit a bare bestmove, got {line:?}"
+    );
+}
+
+#[test]
 fn isready_during_search_answers_before_bestmove() {
     let mut e = Engine::start();
     e.send("position startpos");
