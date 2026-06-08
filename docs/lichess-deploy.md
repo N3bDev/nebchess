@@ -24,8 +24,8 @@ Ship `target/release/nebchess` plus the two data artifacts below to the bot host
 
 `Ponder` arrives with the pondering task (Plan 7 T7); enable it in lichess-bot once advertised.
 
-### Data artifacts (gitignored — build/fetch on the host)
-- **Opening book**: `cargo run --release --bin bookgen tools/books/nebbook.bin db/export_ELO2400.pgn` (or copy a prebuilt `.bin`). PolyGlot format.
+### Data artifacts (gitignored — fetch on the host; both scripts are non-fatal)
+- **Opening book**: `tools/download-book.sh` — fetches the prebuilt `nebbook.bin` (PolyGlot, ~5 MB) from the matching GitHub **release** into `tools/books/`, point `BookFile` there. (The book is a build artifact, not in the repo.) To rebuild from scratch instead: `cargo run --release --bin bookgen tools/books/nebbook.bin <full-game.pgn>` against any 2400+ full-game PGN — the shipped book was built from a private OTB ≥2400 corpus; a public equivalent is the Lichess Elite Database.
 - **Syzygy 3-4-5**: `tools/download-syzygy.sh` (~939 MB into `tools/tb/`), point `SyzygyPath` at that directory.
 
 ## Time management
@@ -39,7 +39,7 @@ The engine is sound across blitz and rapid (180+2 / 300+3 are the tested field T
 ## Operational checklist
 
 1. `cargo build --release`; confirm `printf 'uci\nquit\n' | ./target/release/nebchess` prints `id name NebChess <version>` + `uciok`.
-2. Place `nebbook.bin` and the Syzygy dir on the host; set `BookFile` / `SyzygyPath` in lichess-bot's `config.yml` engine options.
+2. `tools/download-book.sh` (book → tools/books/) + `tools/download-syzygy.sh` (TB → tools/tb/); set `BookFile` / `SyzygyPath` in lichess-bot's `config.yml` engine options.
 3. Set `Hash 256`, `Move Overhead 100`.
 4. Smoke a game offline: `tools/krk-stress.sh` (KR-K conversion) + `tools/uci-torture.sh` (robustness) both green.
 5. Start lichess-bot; watch the first few games for time usage (the `info string time soft=.. hard=.. used=..` line reports per-move allocation).
