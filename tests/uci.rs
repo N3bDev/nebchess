@@ -353,6 +353,80 @@ fn conthist_persists_across_moves_and_resets_on_ucinewgame() {
 }
 
 #[test]
+fn uci_advertises_ponder_option() {
+    let mut e = Engine::start();
+    e.send("uci");
+    let lines = e.collect_until(|l| l == "uciok");
+    assert!(
+        lines.iter().any(|l| l.contains("option name Ponder")),
+        "Ponder option must be advertised, got: {lines:?}"
+    );
+}
+
+#[test]
+fn ponderhit_arms_the_clock_and_bestmove_arrives_within_budget() {
+    // go ponder (infinite) -> ponderhit (arm a real, bounded clock) -> the
+    // search must finish (bestmove) on the timed budget, NOT run forever. The
+    // clock here (~2s) bounds the search well inside the 5s harness timeout; we
+    // additionally assert it lands under 4s, proving the arm actually fired
+    // (an un-armed infinite search would hit the 5s timeout and fail).
+    let mut e = Engine::start();
+    e.send("position startpos moves e2e4 e7e5 g1f3");
+    e.send("go ponder wtime 2000 btime 2000");
+    // give the ponder search a moment to actually be running before the hit
+    thread::sleep(Duration::from_millis(150));
+    let hit_at = Instant::now();
+    e.send("ponderhit");
+    e.expect_line(|l| l.starts_with("bestmove"));
+    assert!(
+        hit_at.elapsed() < Duration::from_secs(4),
+        "bestmove must arrive on the armed budget, took {:?}",
+        hit_at.elapsed()
+    );
+}
+
+#[test]
+fn stop_during_ponder_returns_bestmove_promptly() {
+    // go ponder -> stop (a ponder MISS / abort): bestmove comes back at once,
+    // the same M2 stop discipline as `go infinite` + `stop`.
+    let mut e = Engine::start();
+    e.send("position startpos moves d2d4 d7d5");
+    e.send("go ponder wtime 60000 btime 60000");
+    e.send("stop");
+    let started = Instant::now();
+    let line = e.expect_line(|l| l.starts_with("bestmove"));
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "stop during ponder must return promptly"
+    );
+    let mut pos = Position::startpos();
+    for m in ["d2d4", "d7d5"] {
+        pos.make(find_uci_move(&pos, m).unwrap());
+    }
+    assert_legal_bestmove(&line, &pos);
+}
+
+#[test]
+fn ponder_storm_never_hangs() {
+    // Watchdog mirroring zero_delay_stop_never_hangs but for the ponder states:
+    // hammer go-ponder/ponderhit and go-ponder/stop interleavings; any hang or
+    // panic fails via the 5s timeout. Preserves the stop-flag-race invariant
+    // (cmd_go clears the flag before spawn; ponder adds states, not a race).
+    for i in 0..25 {
+        let mut e = Engine::start();
+        e.send("position startpos moves e2e4");
+        if i % 2 == 0 {
+            e.send("go ponder wtime 1000 btime 1000");
+            e.send("ponderhit");
+        } else {
+            e.send("go ponder wtime 60000 btime 60000");
+            e.send("stop");
+        }
+        e.expect_line(|l| l.starts_with("bestmove"));
+    }
+}
+
+#[test]
 fn zero_delay_stop_never_hangs() {
     // regression for the stop-flag clear race: repeat the tightest
     // go-infinite/stop interleaving; any hang fails via the 5s timeout

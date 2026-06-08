@@ -365,6 +365,39 @@ pub struct IterInfo<'a> {
     pub pv: &'a [Move],
 }
 
+/// Pondering hand-off (T7). A `go ponder` search runs at infinite (no
+/// deadline) until the opponent plays the predicted move (`ponderhit`); at that
+/// instant the UCI layer computes the real time budget and ARMS this handle.
+/// The running search keeps its work (the opponent's think time was free) and
+/// from the arm moment behaves like a normal timed move: `should_stop` honours
+/// `hard` (the absolute ceiling, polled every 2048 nodes) and the iterate loop
+/// honours `soft` (the between-iteration target). Both are `None` while the
+/// search is pondering (un-armed) — identical to an ordinary infinite search.
+///
+/// `Instant` is shared (it is `Send + Sync`); the `Mutex` is locked only at the
+/// node-poll cadence and once per iteration, never on the hot inner path.
+#[derive(Default)]
+pub struct PonderArm {
+    soft: Option<Instant>,
+    hard: Option<Instant>,
+}
+
+impl PonderArm {
+    /// Arm from the just-computed real budget: `soft`/`hard` are durations from
+    /// `now` (the ponderhit moment). Called by the UCI layer on `ponderhit`.
+    pub fn arm(&mut self, now: Instant, soft: Option<u64>, hard: Option<u64>) {
+        self.soft = soft.map(|ms| now + Duration::from_millis(ms));
+        self.hard = hard.map(|ms| now + Duration::from_millis(ms));
+    }
+}
+
+use std::sync::Mutex;
+use std::time::Duration;
+
+/// Shared, lockable ponder arm: cloned into the search thread; armed by the UCI
+/// layer from the main thread on `ponderhit`.
+pub type PonderHandle = Arc<Mutex<PonderArm>>;
+
 pub struct SearchThread<E: Evaluator> {
     pub pos: Position,
     pub eval: E,
@@ -384,6 +417,10 @@ pub struct SearchThread<E: Evaluator> {
     /// across moves: the UCI layer keeps it alive between `go`s (T7). Bench and
     /// `search_to_depth` build a SearchThread with a fresh, zeroed state.
     state: SearchState,
+    /// Pondering arm (T7): when the search runs `go ponder`, the UCI layer arms
+    /// this on `ponderhit` to switch the still-running search from infinite to
+    /// timed. `None` for every non-ponder search (bench/solve/normal `go`).
+    ponder: Option<PonderHandle>,
     /// Move-time telemetry from the last `iterate` call: (base soft, hard) ms
     /// and ms actually spent. Read by the UCI layer for the per-move
     /// `info string time` line (the clock-collapse field instrument).
@@ -407,9 +444,16 @@ impl<E: Evaluator> SearchThread<E> {
             tt: Arc::new(Tt::new(16)),
             tb: None,
             state: SearchState::new(),
+            ponder: None,
             last_budgets_ms: (None, None),
             last_used_ms: 0,
         }
+    }
+
+    /// Install the ponder arm (the UCI layer arms it on `ponderhit`). Set only
+    /// for a `go ponder` search; absent for every other search.
+    pub fn set_ponder(&mut self, ponder: Option<PonderHandle>) {
+        self.ponder = ponder;
     }
 
     /// Install a persistent [`SearchState`] (the UCI layer's cross-move
@@ -500,8 +544,31 @@ impl<E: Evaluator> SearchThread<E> {
                     self.stopped = true;
                 }
             }
+            // Pondering: once `ponderhit` arms the hard deadline, honour it just
+            // like a normal timed search. Un-armed (still pondering) -> `hard`
+            // is None and this is a no-op. The lock is taken only at the
+            // 2048-node poll cadence, and only for a ponder search.
+            if let Some(ref p) = self.ponder {
+                if let Some(h) = p.lock().expect("ponder arm poisoned").hard {
+                    if Instant::now() >= h {
+                        self.stopped = true;
+                    }
+                }
+            }
         }
         self.stopped
+    }
+
+    /// True once the ponder arm's between-iteration soft target has passed.
+    /// `false` while pondering (un-armed) or for any non-ponder search.
+    fn past_ponder_soft(&self) -> bool {
+        match self.ponder {
+            Some(ref p) => match p.lock().expect("ponder arm poisoned").soft {
+                Some(s) => Instant::now() >= s,
+                None => false,
+            },
+            None => false,
+        }
     }
 
     /// Small jitter (±1cp) instead of flat 0: avoids threefold blindness in
@@ -1124,6 +1191,13 @@ impl<E: Evaluator> SearchThread<E> {
             // search tree itself is untouched — only `past_soft` shifts.
             tm.report_iteration(depth, score, best.raw());
             if tm.past_soft() {
+                break;
+            }
+            // Pondering: a `go ponder` search has no `tm` deadline (infinite),
+            // but once `ponderhit` arms the soft target we stop between
+            // iterations just like a normal timed move. No-op while pondering or
+            // for non-ponder searches.
+            if self.past_ponder_soft() {
                 break;
             }
             if score.abs() >= MATE_BOUND {

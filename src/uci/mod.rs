@@ -3,16 +3,19 @@
 
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use crate::board::movegen::find_uci_move;
-use crate::board::Position;
+use crate::board::{Color, Position};
 use crate::book::Book;
 use crate::eval::Hce;
-use crate::search::limits::Limits;
+use crate::search::limits::{Limits, TimeManager};
 use crate::search::tt::Tt;
-use crate::search::{IterInfo, SearchState, SearchThread, MATE, MATE_BOUND};
+use crate::search::{
+    IterInfo, PonderArm, PonderHandle, SearchState, SearchThread, MATE, MATE_BOUND,
+};
 
 pub const NAME: &str = concat!("NebChess ", env!("CARGO_PKG_VERSION"));
 
@@ -48,6 +51,17 @@ struct Uci {
     /// Plies played into the current game (from the `position` command's move
     /// list). Used as the book cutoff and to vary the per-game RNG seed.
     game_ply: u32,
+    /// A `go ponder` search is running (waiting for `ponderhit` or `stop`).
+    /// While set, the running search is infinite and `ponderhit` arms its time
+    /// budget. Cleared once the search ends (stop/ponderhit/join).
+    pondering: bool,
+    /// The ponder arm shared with the running ponder search; `ponderhit` arms
+    /// it. `None` when no ponder search is in flight.
+    ponder_handle: Option<PonderHandle>,
+    /// The REAL clock limits the GUI sent with `go ponder` (wtime/btime/incs/
+    /// movestogo per UCI) plus the side to move — stashed so `ponderhit` can
+    /// compute the time budget at the moment the opponent's move lands.
+    ponder_limits: Option<(Limits, Color)>,
 }
 
 impl Uci {
@@ -63,6 +77,9 @@ impl Uci {
             tb: None,
             book_depth: DEFAULT_BOOK_DEPTH,
             game_ply: 0,
+            pondering: false,
+            ponder_handle: None,
+            ponder_limits: None,
         }
     }
 
@@ -93,6 +110,7 @@ impl Uci {
                     self.stop_and_join();
                     self.cmd_go(&line);
                 }
+                "ponderhit" => self.cmd_ponderhit(),
                 "stop" => self.stop_and_join(),
                 "setoption" => self.cmd_setoption(&line),
                 // debug extension (not UCI): print the current FEN
@@ -141,6 +159,12 @@ impl Uci {
                 }
             }
         }
+        // The search (ponder or normal) is over: drop the ponder bookkeeping so
+        // a stray later `ponderhit` is a no-op (a ponder MISS is exactly this
+        // path — the GUI sends `stop` then a fresh `position`/`go`).
+        self.pondering = false;
+        self.ponder_handle = None;
+        self.ponder_limits = None;
     }
 
     fn cmd_uci(&self) {
@@ -157,6 +181,11 @@ impl Uci {
         println!("option name BookDepth type spin default {DEFAULT_BOOK_DEPTH} min 0 max 40");
         // Syzygy tablebases: a directory path (empty = off).
         println!("option name SyzygyPath type string default <empty>");
+        // Pondering: think on the opponent's clock (the GUI drives it via
+        // `go ponder` / `ponderhit`). The option is advertised so a GUI will
+        // enable pondering; the engine ponders whenever a `go ponder` arrives
+        // regardless, so the flag is informational on our side.
+        println!("option name Ponder type check default false");
         println!("uciok");
     }
 
@@ -208,6 +237,9 @@ impl Uci {
             ("SyzygyPath", Some(v)) => {
                 self.set_tb(&v);
             }
+            // Ponder is accepted and inert: we ponder whenever a `go ponder`
+            // arrives (GUI-driven), so the toggle needs no engine-side state.
+            ("Ponder", Some(_)) => {}
             _ => {}
         }
     }
@@ -311,23 +343,49 @@ impl Uci {
     }
 
     fn cmd_go(&mut self, line: &str) {
+        // `go ponder`: search on the opponent's clock. We must NOT short-circuit
+        // to a book move (the GUI expects no bestmove until ponderhit/stop), and
+        // the search runs at infinite until `ponderhit` arms the clock.
+        let is_ponder = line.split_whitespace().any(|t| t == "ponder");
+
         // Book short-circuit: a pre-search root move source. When it hits we
         // emit bestmove immediately with no search thread (and no info/time
         // telemetry — there was no search). `go` parameters are ignored, which
-        // is correct: a book reply costs ~no clock.
-        if let Some(mv) = self.book_move() {
-            println!("info string book move {mv}");
-            println!("bestmove {mv}");
-            io::stdout().flush().ok();
-            return;
+        // is correct: a book reply costs ~no clock. Skipped while pondering.
+        if !is_ponder {
+            if let Some(mv) = self.book_move() {
+                println!("info string book move {mv}");
+                println!("bestmove {mv}");
+                io::stdout().flush().ok();
+                return;
+            }
         }
 
+        // `parse_go` maps `ponder` to `infinite` already (the search runs with
+        // no deadline). For a ponder search we ALSO keep the real clock limits
+        // (wtime/btime/incs/movestogo — parsed into the same Limits) so
+        // `ponderhit` can budget the time at the moment the opponent replies.
         let limits = parse_go(line);
         let mut st = SearchThread::new(self.pos.clone(), Hce::new());
         st.set_stop_flag(Arc::clone(&self.stop));
         st.set_overhead_ms(self.overhead_ms);
         st.set_tt(Arc::clone(&self.tt));
         st.set_tb(self.tb.clone());
+
+        if is_ponder {
+            // Build the shared arm and hand a clone to the worker; stash the
+            // real limits + side-to-move for `ponderhit`.
+            let handle: PonderHandle = Arc::new(Mutex::new(PonderArm::default()));
+            st.set_ponder(Some(Arc::clone(&handle)));
+            self.ponder_handle = Some(handle);
+            // The stashed limits drive the budget at ponderhit: drop `infinite`
+            // so TimeManager computes real soft/hard from the clock fields.
+            let mut real = limits.clone();
+            real.infinite = false;
+            self.ponder_limits = Some((real, self.pos.stm()));
+            self.pondering = true;
+        }
+
         // Hand the persistent histories into the worker (warm-start). `state`
         // is always Some here: stop_and_join ran before this `go` and reclaimed
         // it; the unwrap_or guard is defensive only.
@@ -355,6 +413,40 @@ impl Uci {
             // T7 cross-move persistence (conthist warm-start).
             st.take_state()
         }));
+    }
+
+    /// `ponderhit`: the opponent played the predicted move, so the still-running
+    /// ponder search must switch from infinite to timed. We do NOT stop and
+    /// restart — the search CONTINUES (its work so far cost us nothing: the
+    /// opponent's think time was free). We compute the real time budget now
+    /// (`start = Instant::now()` — the ponderhit moment) and ARM the shared
+    /// handle; the running search then honours the hard deadline in its node
+    /// poll and the soft target between iterations, exactly like a normal move.
+    ///
+    /// If no ponder search is in flight (a stray `ponderhit`), this is a no-op.
+    fn cmd_ponderhit(&mut self) {
+        if !self.pondering {
+            return; // nothing pondering: ignore (UCI custom)
+        }
+        if let (Some(handle), Some((limits, stm))) =
+            (self.ponder_handle.as_ref(), self.ponder_limits.as_ref())
+        {
+            let now = Instant::now();
+            let tm = TimeManager::new(limits, *stm, self.overhead_ms);
+            // effective soft (stability-scaled base; un-scaled = base at the
+            // start) and the hard ceiling, both as durations from `now`.
+            let soft = tm.effective_soft_ms();
+            let hard = tm.budgets_ms().1;
+            handle
+                .lock()
+                .expect("ponder arm poisoned")
+                .arm(now, soft, hard);
+        }
+        // The clock is armed; the search owns the rest and will print bestmove
+        // when it stops. We are no longer "waiting to ponder" — but the search
+        // is still running, so keep the handle/limits until it joins (a `stop`
+        // or the next command runs stop_and_join, which clears them).
+        self.pondering = false;
     }
 }
 
@@ -387,10 +479,12 @@ fn parse_go(line: &str) -> Limits {
                     tok.next();
                 }
             }
-            // ponder isn't advertised; if a GUI sends it anyway, treating the
-            // search as infinite is the safe interpretation (stop/quit ends it)
+            // `ponder` searches at infinite (no deadline) until `ponderhit`
+            // arms the clock — the same no-deadline path as `infinite`. The
+            // real wtime/btime carried alongside are parsed above and stashed by
+            // `cmd_go` for the ponderhit budget.
             "infinite" | "ponder" => limits.infinite = true,
-            _ => {} // searchmoves etc: ignored in M2
+            _ => {} // searchmoves etc: ignored
         }
     }
     limits
