@@ -14,8 +14,9 @@ engine:
   ponder: true              # 0.7.0 supports pondering; thinks on the opponent's
                             # clock (keeps one core busy continuously)
   uci_options:
-    Hash: 4096              # transposition table MB (engine max). Fine on a 32GB
-                            # box; drop to 256 on a small cloud VM.
+    Hash: 512               # MB PER GAME. With concurrency 6 that's ~3GB total --
+                            # safe under WSL2's memory cap. 512MB is full strength
+                            # at blitz/rapid; bump back to 4096 only if concurrency 1.
     Move Overhead: 100      # ms; covers the Lichess network round-trip
     Threads: 1              # NebChess is single-threaded (Lazy SMP is a later milestone)
     BookDepth: 16           # book answers the first 16 plies, then searches
@@ -31,7 +32,8 @@ rate_limiting_delay: 0
 move_overhead: 1000         # ms: extra clock safety on the bot side
 
 challenge:                  # which incoming challenges to auto-accept
-  concurrency: 1            # one game at a time (single-threaded engine)
+  concurrency: 6            # play 6 bot games in parallel (24-core box, engine is
+                            # 1 thread/game) -> fills the daily quota fast & broad
   accept_bot: true          # also accept challenges from other bots
   only_bot: false
   variants:
