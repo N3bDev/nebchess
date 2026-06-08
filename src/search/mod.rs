@@ -51,6 +51,20 @@ const NULL_R: i32 = 3;
 /// Aspiration window: initial half-width around the previous iteration's score (cp).
 const ASP_DELTA: i32 = 25;
 
+/// Score for a tablebase win at `ply`, deeper plies scoring slightly lower so
+/// the search still prefers the shortest conversion. Deliberately BELOW
+/// [`MATE_BOUND`]: a Syzygy win is a known result, NOT a proven mate line — it
+/// must not be printed as `mate N`, trigger the forced-mate early exit, or
+/// collide with real mate distances. Loss is the negation.
+#[inline]
+fn tb_win_score(ply: usize) -> i32 {
+    MATE_BOUND - 100 - ply as i32
+}
+
+/// Minimum depth for an interior tablebase probe. Below this the probe's cost
+/// isn't repaid (shallow nodes are cheap to search outright).
+const TB_PROBE_MIN_DEPTH: i32 = 4;
+
 /// Triangular PV table: row[ply] holds the best line found at that ply.
 struct PvTable {
     moves: Vec<[Move; MAX_PLY]>,
@@ -299,6 +313,9 @@ pub struct SearchThread<E: Evaluator> {
     pv: PvTable,
     stack: Box<[StackEntry; MAX_PLY]>,
     tt: Arc<Tt>,
+    /// Syzygy tablebases (`SyzygyPath`); `None` = off. Shared read-only with
+    /// the UCI layer, so an `Arc`.
+    tb: Option<Arc<crate::tb::Tb>>,
     history: Box<HistoryTable>,
     cont_hist1: Box<ContHist>,
     cont_hist2: Box<ContHist>,
@@ -323,6 +340,7 @@ impl<E: Evaluator> SearchThread<E> {
             pv: PvTable::new(),
             stack: Box::new([StackEntry::EMPTY; MAX_PLY]),
             tt: Arc::new(Tt::new(16)),
+            tb: None,
             history: Box::new([[[0; 64]; 64]; 2]),
             cont_hist1: zeroed_cont_hist(),
             cont_hist2: zeroed_cont_hist(),
@@ -358,6 +376,9 @@ impl<E: Evaluator> SearchThread<E> {
     }
     pub fn set_tt(&mut self, tt: Arc<Tt>) {
         self.tt = tt;
+    }
+    pub fn set_tb(&mut self, tb: Option<Arc<crate::tb::Tb>>) {
+        self.tb = tb;
     }
 
     /// Best line from the last completed search call.
@@ -475,6 +496,35 @@ impl<E: Evaluator> SearchThread<E> {
         self.nodes += 1;
         if ply >= MAX_PLY - 1 {
             return self.eval.evaluate(&self.pos);
+        }
+
+        // Syzygy WDL probe (interior). At ply > 0, deep enough that the probe
+        // pays for itself, with the probe's own piece-count / 50-move / castling
+        // gating handled inside `probe_wdl`. A hit fully resolves this subtree:
+        // Win/Loss score below MATE_BOUND (a KNOWN result, NOT a proven mate —
+        // never `mate N`), Draw -> draw score. Store EXACT to the TT so siblings
+        // and re-searches reuse it. `depth` is recorded as the node's depth so a
+        // shallower revisit still trusts it.
+        if ply > 0 && depth >= TB_PROBE_MIN_DEPTH {
+            if let Some(tb) = self.tb.clone() {
+                if let Some(wdl) = tb.probe_wdl(&self.pos) {
+                    let score = match wdl {
+                        crate::tb::Wdl::Win => tb_win_score(ply),
+                        crate::tb::Wdl::Loss => -tb_win_score(ply),
+                        crate::tb::Wdl::Draw => self.draw_score(),
+                    };
+                    self.tt.store(
+                        self.pos.key(),
+                        Move::NULL,
+                        score,
+                        tt::EVAL_NONE,
+                        depth,
+                        tt::Bound::Exact,
+                        ply,
+                    );
+                    return score;
+                }
+            }
         }
 
         // TT probe. We always probe for the tt_move (used in Task 4 move
@@ -931,6 +981,32 @@ impl<E: Evaluator> SearchThread<E> {
         self.tt.new_search();
 
         let mut best = self.first_legal()?;
+
+        // Syzygy DTZ root probe (v1: a hit ends the search — play the
+        // tablebase's recommended move). Correct DTZ play converts won
+        // endgames optimally and never throws a draw away; the move's flags are
+        // recovered by the wrapper. Emit one info line at depth 0 so logs show
+        // the source, set the move-time telemetry, and return immediately.
+        if let Some(tb) = self.tb.clone() {
+            if let Some((mv, wdl)) = tb.probe_root(&self.pos) {
+                let score = match wdl {
+                    crate::tb::Wdl::Win => tb_win_score(1),
+                    crate::tb::Wdl::Loss => -tb_win_score(1),
+                    crate::tb::Wdl::Draw => 0,
+                };
+                info(IterInfo {
+                    depth: 0,
+                    score,
+                    nodes: 0,
+                    elapsed_ms: tm.elapsed_ms(),
+                    pv: std::slice::from_ref(&mv),
+                });
+                self.last_budgets_ms = tm.budgets_ms();
+                self.last_used_ms = tm.elapsed_ms();
+                return Some(mv);
+            }
+        }
+
         let max_depth = limits
             .depth
             .unwrap_or(MAX_PLY as i32 - 1)

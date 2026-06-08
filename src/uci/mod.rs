@@ -32,6 +32,9 @@ struct Uci {
     tt: Arc<Tt>,
     /// Loaded PolyGlot opening book (`BookFile`); `None` = off.
     book: Option<Book>,
+    /// Loaded Syzygy tablebases (`SyzygyPath`); `None` = off. Shared into each
+    /// search thread (read-only) via `Arc`.
+    tb: Option<Arc<crate::tb::Tb>>,
     /// Plies the book will answer before handing off to search (`BookDepth`).
     book_depth: u32,
     /// Plies played into the current game (from the `position` command's move
@@ -48,6 +51,7 @@ impl Uci {
             overhead_ms: 50,
             tt: Arc::new(Tt::new(16)),
             book: None,
+            tb: None,
             book_depth: DEFAULT_BOOK_DEPTH,
             game_ply: 0,
         }
@@ -119,6 +123,8 @@ impl Uci {
         // PolyGlot opening book: a file path (empty = off) and a ply cutoff.
         println!("option name BookFile type string default <empty>");
         println!("option name BookDepth type spin default {DEFAULT_BOOK_DEPTH} min 0 max 40");
+        // Syzygy tablebases: a directory path (empty = off).
+        println!("option name SyzygyPath type string default <empty>");
         println!("uciok");
     }
 
@@ -166,6 +172,9 @@ impl Uci {
                 if let Ok(d) = v.parse::<u32>() {
                     self.book_depth = d.min(40);
                 }
+            }
+            ("SyzygyPath", Some(v)) => {
+                self.set_tb(&v);
             }
             _ => {}
         }
@@ -236,6 +245,28 @@ impl Uci {
         }
     }
 
+    /// Loads (or clears) Syzygy tablebases from a `SyzygyPath` value. An empty
+    /// value or the UCI sentinel `<empty>` turns them off; a path with no usable
+    /// tables is reported and leaves them off (never fatal). See `Tb::init` for
+    /// the pyrrhic-rs process-singleton caveat (set the path once per process).
+    fn set_tb(&mut self, path: &str) {
+        let path = path.trim();
+        if path.is_empty() || path == "<empty>" {
+            self.tb = None;
+            return;
+        }
+        match crate::tb::Tb::init(path) {
+            Some(tb) => {
+                println!("info string syzygy loaded: up to {}-men", tb.max_men());
+                self.tb = Some(Arc::new(tb));
+            }
+            None => {
+                println!("info string syzygy load failed or no tables at: {path}");
+                self.tb = None;
+            }
+        }
+    }
+
     /// If the book is loaded and the game is still inside the book window,
     /// returns a book move for the current position (or `None`). The RNG seed
     /// is deterministic per position-per-game but varies across games.
@@ -264,6 +295,7 @@ impl Uci {
         st.set_stop_flag(Arc::clone(&self.stop));
         st.set_overhead_ms(self.overhead_ms);
         st.set_tt(Arc::clone(&self.tt));
+        st.set_tb(self.tb.clone());
         // clear the stop flag on THIS thread before spawn: a worker-side
         // clear races with a GUI 'stop' arriving right after 'go'
         self.stop.store(false, Ordering::Relaxed);
