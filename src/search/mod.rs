@@ -129,18 +129,21 @@ impl StackEntry {
 }
 
 /// Butterfly history: [side][from][to], bumped depth^2 on quiet beta cutoffs.
-/// Lives in [`SearchState`], which the UCI layer keeps alive across moves so
-/// these warm-start each `go` from the prior move's table (the T7 persistence
-/// feature). `search_to_depth`/bench build a SearchThread with a fresh
-/// SearchState, so single-search behaviour (and the bench fingerprint) is
-/// unchanged.
+/// Lives in [`SearchState`]. The UCI layer keeps the SearchState alive across
+/// moves (so pondering can thread it in/out via the JoinHandle), but the
+/// histories are RESET at the start of every search ([`SearchThread::iterate`]):
+/// the cross-move warm-start regressed −70 elo (see `SearchState::clear`). So in
+/// effect this is fresh each `go`. `search_to_depth`/bench build a SearchThread
+/// with a fresh SearchState, so single-search behaviour (and the bench
+/// fingerprint) is unchanged.
 type HistoryTable = [[[i32; 64]; 64]; 2];
 
 /// Continuation history: indexed `[prev_piece][prev_to][piece][to]`, one table
 /// for the move made 1 ply ago and one for 2 plies ago. `i16` saturating with a
 /// `depth^2` bonus / `−depth^2` malus, clamped to ±16_000. 6*64*6*64*2 bytes =
-/// 294_912 bytes (~288 KiB) per table. Persists across moves (the feature):
-/// cleared only at [`SearchState::new`] / `ucinewgame`.
+/// 294_912 bytes (~288 KiB) per table. Reset at the start of every search (the
+/// cross-move warm-start regressed −70 elo) and also at
+/// [`SearchState::clear`] / `ucinewgame`.
 type ContHist = [[[[i16; 64]; 6]; 64]; 6];
 
 /// Saturating-clamp bound for continuation-history entries.
@@ -158,20 +161,26 @@ fn zeroed_cont_hist() -> Box<ContHist> {
         .unwrap_or_else(|_| unreachable!("len 6 -> [_; 6]"))
 }
 
-/// Move-ordering history that PERSISTS across moves within one game (T7).
+/// Move-ordering history (butterfly + the two continuation-history tables).
 ///
-/// Butterfly + the two continuation-history tables used to live as per-`go`
-/// fields on [`SearchThread`], allocated fresh each search — which threw away
-/// their cross-move signal (the Plan-6 review note: conthist warm-start). They
-/// now live here. The UCI layer owns one `SearchState`, hands it into the
-/// search thread for the duration of a `go`, and reclaims it at join (the
-/// search threads never overlap — the loop joins before the next `go`). The TT
-/// is already persistent (Arc-shared); this brings histories to parity.
+/// The UCI layer owns one `SearchState`, hands it into the search thread for
+/// the duration of a `go`, and reclaims it at join via the JoinHandle (the
+/// search threads never overlap — the loop joins before the next `go`). That
+/// plumbing exists so PONDERING can hand the state into the infinite ponder
+/// search and get it back; it is load-bearing and must stay.
+///
+/// The tables themselves do NOT warm-start across moves. An earlier design
+/// (commit d48de46) let them persist between `go`s; a 400-game probe measured
+/// that at −70 elo (clean losses — likely the depth² bonuses saturating to the
+/// ±caps over a long game, collapsing move-ordering discrimination). So
+/// [`SearchThread::iterate`] now calls [`clear`](Self::clear) at the START of
+/// every search: play is behaviourally identical to per-`go`-fresh histories
+/// while the SearchState plumbing (and pondering) stay intact. The TT is a
+/// separate Arc-shared table whose cross-move persistence is correct and is NOT
+/// affected by this reset.
 ///
 /// `new()` produces zeroed tables — that is what `search_to_depth`/bench use,
-/// so single-search behaviour and the bench fingerprint are unchanged. Across
-/// moves the prior search's tables are reused (warm start); `clear()`
-/// (`ucinewgame`) returns to the zeroed state for a fresh game.
+/// so single-search behaviour and the bench fingerprint are unchanged.
 pub struct SearchState {
     history: Box<HistoryTable>,
     cont_hist1: Box<ContHist>,
@@ -187,8 +196,10 @@ impl SearchState {
         }
     }
 
-    /// Reset to a fresh game (called on `ucinewgame`): zero every table so the
-    /// next game does not inherit the previous game's move-ordering bias.
+    /// Zero every table. Called at the START of every search
+    /// ([`SearchThread::iterate`]) — the cross-move warm-start regressed −70 elo
+    /// — and on `ucinewgame`. After this the next search's move ordering does
+    /// not inherit any prior move's (or prior game's) history bias.
     pub fn clear(&mut self) {
         *self.history = [[[0; 64]; 64]; 2];
         *self.cont_hist1 = [[[[0; 64]; 6]; 64]; 6];
@@ -196,10 +207,10 @@ impl SearchState {
     }
 
     /// Count of non-zero continuation-history entries across both tables. Used
-    /// by the UCI `histsum` debug command (the T7 persistence integration test
-    /// reads it: non-zero after a search, surviving into the next `go`, and
-    /// zero again after `ucinewgame`). Cheap relative to a search; not on any
-    /// hot path.
+    /// by the UCI `histsum` debug command (the histories-reset integration test
+    /// reads it: populated within a search, but zero again at the start of the
+    /// next `go` — no warm-start — and zero after `ucinewgame`). Cheap relative
+    /// to a search; not on any hot path.
     pub fn conthist_nonzero(&self) -> u64 {
         let count = |t: &ContHist| -> u64 {
             t.iter()
@@ -413,9 +424,12 @@ pub struct SearchThread<E: Evaluator> {
     /// Syzygy tablebases (`SyzygyPath`); `None` = off. Shared read-only with
     /// the UCI layer, so an `Arc`.
     tb: Option<Arc<crate::tb::Tb>>,
-    /// Move-ordering history (butterfly + the two conthist tables). Persists
-    /// across moves: the UCI layer keeps it alive between `go`s (T7). Bench and
-    /// `search_to_depth` build a SearchThread with a fresh, zeroed state.
+    /// Move-ordering history (butterfly + the two conthist tables). The UCI
+    /// layer keeps it alive between `go`s and threads it in/out via the
+    /// JoinHandle (pondering depends on that plumbing), but `iterate` clears it
+    /// at the start of every search — the cross-move warm-start regressed −70
+    /// elo. Bench and `search_to_depth` build a SearchThread with a fresh,
+    /// zeroed state.
     state: SearchState,
     /// Pondering arm (T7): when the search runs `go ponder`, the UCI layer arms
     /// this on `ponderhit` to switch the still-running search from infinite to
@@ -456,16 +470,18 @@ impl<E: Evaluator> SearchThread<E> {
         self.ponder = ponder;
     }
 
-    /// Install a persistent [`SearchState`] (the UCI layer's cross-move
-    /// histories), replacing the fresh one built by `new()`. Used by the `go`
-    /// path so move ordering warm-starts from the prior search.
+    /// Install the UCI layer's [`SearchState`], replacing the fresh one built by
+    /// `new()`. Used by the `go` path to thread the state into the search (the
+    /// plumbing pondering depends on); `iterate` clears it before searching, so
+    /// no move-ordering bias carries over from the prior search.
     pub fn set_state(&mut self, state: SearchState) {
         self.state = state;
     }
 
     /// Reclaim the [`SearchState`] after a search so the UCI layer can keep it
-    /// alive for the next move. Leaves a fresh state behind (this SearchThread
-    /// is dropped immediately after, so the replacement is never searched).
+    /// alive (for the pondering hand-off). Leaves a fresh state behind (this
+    /// SearchThread is dropped immediately after, so the replacement is never
+    /// searched).
     pub fn take_state(&mut self) -> SearchState {
         std::mem::take(&mut self.state)
     }
@@ -1127,6 +1143,18 @@ impl<E: Evaluator> SearchThread<E> {
         self.node_limit = limits.nodes;
         self.nodes = 0;
         self.tt.new_search();
+        // Reset move-ordering histories at the START of every search. The
+        // SearchState plumbing (owned by the UCI layer, threaded in/out via the
+        // JoinHandle) stays — pondering depends on it — but the cross-move
+        // WARM-START is dropped: a 400-game probe measured it at −70 elo (likely
+        // depth² bonuses saturating to the ±caps over a long game, collapsing
+        // move-ordering discrimination). Clearing here makes play behaviourally
+        // identical to per-go-fresh histories while keeping the plumbing. The TT
+        // is Arc-shared and is NOT touched here — its cross-move persistence is
+        // correct and unchanged. (Bench/`search_to_depth` build a fresh, already
+        // zeroed SearchState and never call `iterate`, so the fingerprint is
+        // unaffected.)
+        self.state.clear();
 
         let mut best = self.first_legal()?;
 

@@ -30,14 +30,16 @@ pub fn run() {
 struct Uci {
     pos: Position,
     stop: Arc<AtomicBool>,
-    /// Running search worker. It returns the [`SearchState`] so the move
-    /// histories survive into the next `go` (T7 persistence); reclaimed at
-    /// join in `stop_and_join`.
+    /// Running search worker. It returns the [`SearchState`] via the JoinHandle
+    /// so the same allocation can be reused (and, critically, so a ponder search
+    /// can hand its state back); reclaimed at join in `stop_and_join`. The
+    /// histories do not warm-start — the worker's `iterate` clears them.
     search: Option<JoinHandle<SearchState>>,
-    /// Persistent move-ordering histories (butterfly + conthist), kept alive
-    /// across moves. `Some` while no search runs (it has been reclaimed);
-    /// `None` while a search owns it on the worker thread. Reset by
-    /// `ucinewgame`.
+    /// Move-ordering histories (butterfly + conthist) owned by the UCI layer.
+    /// `Some` while no search runs (it has been reclaimed); `None` while a
+    /// search owns it on the worker thread. The allocation is kept alive across
+    /// moves for the pondering hand-off, but the tables are cleared at the start
+    /// of every search (and on `ucinewgame`) — no cross-move warm-start.
     state: Option<SearchState>,
     overhead_ms: u64,
     tt: Arc<Tt>,
@@ -116,10 +118,11 @@ impl Uci {
                 // debug extension (not UCI): print the current FEN
                 "fen" => println!("{}", self.pos.to_fen()),
                 // debug extension (not UCI): print the count of non-zero
-                // continuation-history entries on the persistent state. Used by
-                // the T7 persistence test (warm-start survives across `go`,
-                // resets on `ucinewgame`). Joins any finished/in-flight search
-                // first so the state has been reclaimed before we read it.
+                // continuation-history entries on the reclaimed state. Used by
+                // the histories-reset test (populated within a `go`, but zero
+                // again at the start of the next `go` — no warm-start). Joins
+                // any finished/in-flight search first so the state has been
+                // reclaimed before we read it.
                 "histsum" => {
                     self.stop_and_join();
                     let n = self.state.as_ref().map_or(0, SearchState::conthist_nonzero);
@@ -137,9 +140,11 @@ impl Uci {
     }
 
     /// Abort any running search and wait for its bestmove to be printed. The
-    /// worker returns its [`SearchState`] (persistent histories); we reclaim it
-    /// so the next `go` warm-starts. On a worker panic the state is lost — we
-    /// install a fresh one (correctness over warmth; a panic is exceptional).
+    /// worker returns its [`SearchState`]; we reclaim it so the allocation is
+    /// reused (and so a ponder search can hand its state back). The histories
+    /// were cleared at the start of that search — no warm-start. On a worker
+    /// panic the state is lost — we install a fresh one (a panic is
+    /// exceptional).
     fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.search.take() {
@@ -386,9 +391,12 @@ impl Uci {
             self.pondering = true;
         }
 
-        // Hand the persistent histories into the worker (warm-start). `state`
-        // is always Some here: stop_and_join ran before this `go` and reclaimed
-        // it; the unwrap_or guard is defensive only.
+        // Thread the SearchState into the worker. This plumbing (state owned by
+        // Uci, handed in here and returned via the JoinHandle) is what pondering
+        // depends on; the histories themselves do NOT warm-start — `iterate`
+        // clears them at the start of the search (the cross-move warm-start
+        // regressed −70 elo). `state` is always Some here: stop_and_join ran
+        // before this `go` and reclaimed it; the unwrap_or guard is defensive.
         st.set_state(self.state.take().unwrap_or_default());
         // clear the stop flag on THIS thread before spawn: a worker-side
         // clear races with a GUI 'stop' arriving right after 'go'
@@ -409,8 +417,9 @@ impl Uci {
                 None => println!("bestmove 0000"), // no legal moves on board
             }
             io::stdout().flush().ok();
-            // Return the histories so the UCI loop reclaims them at join — the
-            // T7 cross-move persistence (conthist warm-start).
+            // Return the state so the UCI loop reclaims it at join (reused next
+            // `go`, and required for the ponder hand-off). Its histories were
+            // cleared at the start of this search — no cross-move warm-start.
             st.take_state()
         }));
     }

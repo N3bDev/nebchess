@@ -299,9 +299,8 @@ fn book_castling_entry_resolves_to_castle_move() {
 
 impl Engine {
     /// Read the `histsum N` count from the engine's debug command (non-zero
-    /// continuation-history entries on the persistent state). `isready` first
-    /// flushes any in-flight search output so the histsum reflects a settled
-    /// state.
+    /// continuation-history entries on the reclaimed state). The command joins
+    /// any in-flight search first, so this reflects a settled state.
     fn histsum(&mut self) -> u64 {
         self.send("histsum");
         let line = self.expect_line(|l| l.starts_with("histsum "));
@@ -311,43 +310,75 @@ impl Engine {
             .parse()
             .expect("histsum count")
     }
+
+    /// Node count from the deepest `info depth …` line of the most recent `go`
+    /// (the line just before `bestmove`). Used to observe TT reuse across
+    /// moves: a warm TT makes a re-search of the same position far cheaper.
+    fn nodes_of_last_go(&mut self) -> u64 {
+        let lines = self.collect_until(|l| l.starts_with("bestmove"));
+        let info = lines
+            .iter()
+            .rev()
+            .find(|l| l.starts_with("info depth"))
+            .expect("an info line before bestmove");
+        let toks: Vec<&str> = info.split_whitespace().collect();
+        let i = toks
+            .iter()
+            .position(|&t| t == "nodes")
+            .expect("nodes field");
+        toks[i + 1].parse().expect("node count")
+    }
 }
 
 #[test]
-fn conthist_persists_across_moves_and_resets_on_ucinewgame() {
-    // T7 persistence: the continuation histories must survive from one `go`
-    // into the next (warm-start) and be cleared by `ucinewgame`.
+fn histories_reset_each_search_while_tt_persists_across_moves() {
+    // The carve: the SearchState plumbing stays (the worker returns it via the
+    // JoinHandle — pondering needs that), but the move-ordering histories do
+    // NOT warm-start across moves (the cross-move warm-start regressed −70
+    // elo). They are cleared at the START of every search. The TT is a separate
+    // Arc-shared table whose cross-move persistence is correct and unchanged.
     let mut e = Engine::start();
     e.send("ucinewgame");
     e.send("position startpos");
-    // before any search the persistent state is zeroed
+    // before any search the state is zeroed
     assert_eq!(e.histsum(), 0, "histories start empty");
 
     // go #1: a real search populates the continuation histories
-    e.send("go depth 8");
-    e.expect_line(|l| l.starts_with("bestmove"));
+    e.send("position startpos moves e2e4");
+    e.send("go depth 10");
+    let nodes_go1 = e.nodes_of_last_go();
     let after_go1 = e.histsum();
     assert!(after_go1 > 0, "go #1 populated conthist (got {after_go1})");
+    assert!(nodes_go1 > 0, "go #1 searched some nodes");
 
-    // go #2 from a different position: at the START of go #2 the histories
-    // from go #1 must still be present (reclaimed at join, handed back in).
-    // histsum is read after stop_and_join for the next position but before the
-    // new search, by issuing it between the two — the search of go #2 only adds
-    // to them. Re-reading here (post go#1, pre go#2) proves survival.
-    e.send("position startpos moves d2d4");
-    let before_go2 = e.histsum();
-    assert_eq!(
-        before_go2, after_go1,
-        "conthist survived from go #1 into go #2 (warm-start)"
-    );
-    e.send("go depth 8");
+    // go #2 starts from a FRESH (zeroed) history table — the warm-start was
+    // dropped. We prove the reset-at-start with a terminal position: this FEN
+    // is a stalemate, so the search returns immediately with no quiet beta
+    // cutoff and therefore adds NOTHING to the histories. The reclaimed state
+    // is zero ONLY because `iterate` cleared it before bailing on the
+    // no-legal-moves root; a warm-start would leave go #1's table intact here.
+    e.send("position fen 7k/5Q2/6K1/8/8/8/8/8 b - - 0 1");
+    e.send("go depth 1");
     e.expect_line(|l| l.starts_with("bestmove"));
-    assert!(
-        e.histsum() >= after_go1,
-        "go #2 builds on the warm histories"
+    assert_eq!(
+        e.histsum(),
+        0,
+        "histories are FRESH (zeroed) at the start of go #2 — no warm-start"
     );
 
-    // ucinewgame resets the persistent histories to zero
+    // TT persistence (unchanged): re-search the EXACT position from go #1. The
+    // persistent TT (never cleared except on ucinewgame / Hash) makes this far
+    // cheaper than the cold go #1 — proof the TT survived across the moves
+    // above while the histories reset.
+    e.send("position startpos moves e2e4");
+    e.send("go depth 10");
+    let nodes_go3 = e.nodes_of_last_go();
+    assert!(
+        nodes_go3 < nodes_go1,
+        "TT persisted: warm re-search ({nodes_go3}) is cheaper than cold ({nodes_go1})"
+    );
+
+    // ucinewgame still zeroes the histories (and clears the TT)
     e.send("ucinewgame");
     assert_eq!(e.histsum(), 0, "ucinewgame cleared the histories");
 }
