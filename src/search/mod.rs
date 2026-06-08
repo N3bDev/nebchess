@@ -506,7 +506,11 @@ impl<E: Evaluator> SearchThread<E> {
         // and re-searches reuse it. `depth` is recorded as the node's depth so a
         // shallower revisit still trusts it.
         if ply > 0 && depth >= TB_PROBE_MIN_DEPTH {
-            if let Some(tb) = self.tb.clone() {
+            // Borrow the handle (not `self.tb.clone()`): an interior probe runs
+            // at every TB-eligible node, and an Arc clone there is a hot-path
+            // atomic refcount bump for no reason — `probe_wdl` only needs `&Tb`.
+            // Behaviour-identical; bench unchanged.
+            if let Some(ref tb) = self.tb {
                 if let Some(wdl) = tb.probe_wdl(&self.pos) {
                     let score = match wdl {
                         crate::tb::Wdl::Win => tb_win_score(ply),
