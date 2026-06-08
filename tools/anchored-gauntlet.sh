@@ -18,6 +18,10 @@ ROUNDS=$(( GAMES / 2 ))
 CONCURRENCY=$(( $(nproc) - 1 ))
 [[ $CONCURRENCY -lt 1 ]] && CONCURRENCY=1
 
+# Optional NebChess UCI options (e.g. a deploy-config run with book+TB):
+#   NEB_OPTS="option.BookFile=... option.SyzygyPath=..." tools/anchored-gauntlet.sh 300
+# Empty by default → the canonical pure-engine measurement (book/TB off).
+NEB_OPTS="${NEB_OPTS:-}"
 NEBCHESS="$(realpath ../target/release/nebchess)"
 FASTCHESS="$(realpath bin/fastchess)"
 ORDO="$(realpath bin/ordo)"
@@ -86,7 +90,7 @@ while IFS=' ' read -r anchor_name _rating; do
     echo "    pgn    : tools/$PGN_OUT"
 
     "$FASTCHESS" \
-        -engine cmd="$NEBCHESS" name=nebchess \
+        -engine cmd="$NEBCHESS" name=nebchess $NEB_OPTS \
         -engine cmd="$anchor_bin" name="$anchor_name" \
         -each tc=10+0.1 option.Hash=16 option.Threads=1 \
         -openings file="$BOOK" format=pgn order=random \
