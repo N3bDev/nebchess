@@ -297,6 +297,61 @@ fn book_castling_entry_resolves_to_castle_move() {
     let _ = std::fs::remove_file(&path);
 }
 
+impl Engine {
+    /// Read the `histsum N` count from the engine's debug command (non-zero
+    /// continuation-history entries on the persistent state). `isready` first
+    /// flushes any in-flight search output so the histsum reflects a settled
+    /// state.
+    fn histsum(&mut self) -> u64 {
+        self.send("histsum");
+        let line = self.expect_line(|l| l.starts_with("histsum "));
+        line.strip_prefix("histsum ")
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("histsum count")
+    }
+}
+
+#[test]
+fn conthist_persists_across_moves_and_resets_on_ucinewgame() {
+    // T7 persistence: the continuation histories must survive from one `go`
+    // into the next (warm-start) and be cleared by `ucinewgame`.
+    let mut e = Engine::start();
+    e.send("ucinewgame");
+    e.send("position startpos");
+    // before any search the persistent state is zeroed
+    assert_eq!(e.histsum(), 0, "histories start empty");
+
+    // go #1: a real search populates the continuation histories
+    e.send("go depth 8");
+    e.expect_line(|l| l.starts_with("bestmove"));
+    let after_go1 = e.histsum();
+    assert!(after_go1 > 0, "go #1 populated conthist (got {after_go1})");
+
+    // go #2 from a different position: at the START of go #2 the histories
+    // from go #1 must still be present (reclaimed at join, handed back in).
+    // histsum is read after stop_and_join for the next position but before the
+    // new search, by issuing it between the two — the search of go #2 only adds
+    // to them. Re-reading here (post go#1, pre go#2) proves survival.
+    e.send("position startpos moves d2d4");
+    let before_go2 = e.histsum();
+    assert_eq!(
+        before_go2, after_go1,
+        "conthist survived from go #1 into go #2 (warm-start)"
+    );
+    e.send("go depth 8");
+    e.expect_line(|l| l.starts_with("bestmove"));
+    assert!(
+        e.histsum() >= after_go1,
+        "go #2 builds on the warm histories"
+    );
+
+    // ucinewgame resets the persistent histories to zero
+    e.send("ucinewgame");
+    assert_eq!(e.histsum(), 0, "ucinewgame cleared the histories");
+}
+
 #[test]
 fn zero_delay_stop_never_hangs() {
     // regression for the stop-flag clear race: repeat the tightest

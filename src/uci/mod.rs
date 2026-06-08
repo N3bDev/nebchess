@@ -12,7 +12,7 @@ use crate::book::Book;
 use crate::eval::Hce;
 use crate::search::limits::Limits;
 use crate::search::tt::Tt;
-use crate::search::{IterInfo, SearchThread, MATE, MATE_BOUND};
+use crate::search::{IterInfo, SearchState, SearchThread, MATE, MATE_BOUND};
 
 pub const NAME: &str = concat!("NebChess ", env!("CARGO_PKG_VERSION"));
 
@@ -27,7 +27,15 @@ pub fn run() {
 struct Uci {
     pos: Position,
     stop: Arc<AtomicBool>,
-    search: Option<JoinHandle<()>>,
+    /// Running search worker. It returns the [`SearchState`] so the move
+    /// histories survive into the next `go` (T7 persistence); reclaimed at
+    /// join in `stop_and_join`.
+    search: Option<JoinHandle<SearchState>>,
+    /// Persistent move-ordering histories (butterfly + conthist), kept alive
+    /// across moves. `Some` while no search runs (it has been reclaimed);
+    /// `None` while a search owns it on the worker thread. Reset by
+    /// `ucinewgame`.
+    state: Option<SearchState>,
     overhead_ms: u64,
     tt: Arc<Tt>,
     /// Loaded PolyGlot opening book (`BookFile`); `None` = off.
@@ -48,6 +56,7 @@ impl Uci {
             pos: Position::startpos(),
             stop: Arc::new(AtomicBool::new(false)),
             search: None,
+            state: Some(SearchState::new()),
             overhead_ms: 50,
             tt: Arc::new(Tt::new(16)),
             book: None,
@@ -70,6 +79,11 @@ impl Uci {
                     self.pos = Position::startpos();
                     self.game_ply = 0;
                     self.tt.clear();
+                    // Fresh game: drop the prior game's move-ordering histories
+                    // so they don't bias the new one (the TT is cleared above).
+                    if let Some(state) = self.state.as_mut() {
+                        state.clear();
+                    }
                 }
                 "position" => {
                     self.stop_and_join();
@@ -83,6 +97,16 @@ impl Uci {
                 "setoption" => self.cmd_setoption(&line),
                 // debug extension (not UCI): print the current FEN
                 "fen" => println!("{}", self.pos.to_fen()),
+                // debug extension (not UCI): print the count of non-zero
+                // continuation-history entries on the persistent state. Used by
+                // the T7 persistence test (warm-start survives across `go`,
+                // resets on `ucinewgame`). Joins any finished/in-flight search
+                // first so the state has been reclaimed before we read it.
+                "histsum" => {
+                    self.stop_and_join();
+                    let n = self.state.as_ref().map_or(0, SearchState::conthist_nonzero);
+                    println!("histsum {n}");
+                }
                 "quit" => {
                     self.stop_and_join();
                     return;
@@ -94,19 +118,27 @@ impl Uci {
         self.stop_and_join(); // EOF
     }
 
-    /// Abort any running search and wait for its bestmove to be printed.
+    /// Abort any running search and wait for its bestmove to be printed. The
+    /// worker returns its [`SearchState`] (persistent histories); we reclaim it
+    /// so the next `go` warm-starts. On a worker panic the state is lost — we
+    /// install a fresh one (correctness over warmth; a panic is exceptional).
     fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.search.take() {
-            if h.join().is_err() {
-                // worker panicked before printing bestmove: emit a legal
-                // fallback so the GUI doesn't timeout-forfeit the game
-                let mv = crate::board::movegen::find_first_legal(&mut self.pos);
-                match mv {
-                    Some(mv) => println!("bestmove {mv}"),
-                    None => println!("bestmove 0000"),
+            match h.join() {
+                Ok(state) => self.state = Some(state),
+                Err(_) => {
+                    // worker panicked before printing bestmove: emit a legal
+                    // fallback so the GUI doesn't timeout-forfeit the game
+                    let mv = crate::board::movegen::find_first_legal(&mut self.pos);
+                    match mv {
+                        Some(mv) => println!("bestmove {mv}"),
+                        None => println!("bestmove 0000"),
+                    }
+                    io::stdout().flush().ok();
+                    // histories went down with the worker: start fresh.
+                    self.state = Some(SearchState::new());
                 }
-                io::stdout().flush().ok();
             }
         }
     }
@@ -296,6 +328,10 @@ impl Uci {
         st.set_overhead_ms(self.overhead_ms);
         st.set_tt(Arc::clone(&self.tt));
         st.set_tb(self.tb.clone());
+        // Hand the persistent histories into the worker (warm-start). `state`
+        // is always Some here: stop_and_join ran before this `go` and reclaimed
+        // it; the unwrap_or guard is defensive only.
+        st.set_state(self.state.take().unwrap_or_default());
         // clear the stop flag on THIS thread before spawn: a worker-side
         // clear races with a GUI 'stop' arriving right after 'go'
         self.stop.store(false, Ordering::Relaxed);
@@ -315,6 +351,9 @@ impl Uci {
                 None => println!("bestmove 0000"), // no legal moves on board
             }
             io::stdout().flush().ok();
+            // Return the histories so the UCI loop reclaims them at join — the
+            // T7 cross-move persistence (conthist warm-start).
+            st.take_state()
         }));
     }
 }

@@ -129,15 +129,18 @@ impl StackEntry {
 }
 
 /// Butterfly history: [side][from][to], bumped depth^2 on quiet beta cutoffs.
-/// Fresh per `go` (SearchThread is per-search; cross-move persistence is an
-/// M4 refactor — recorded in the plan header).
+/// Lives in [`SearchState`], which the UCI layer keeps alive across moves so
+/// these warm-start each `go` from the prior move's table (the T7 persistence
+/// feature). `search_to_depth`/bench build a SearchThread with a fresh
+/// SearchState, so single-search behaviour (and the bench fingerprint) is
+/// unchanged.
 type HistoryTable = [[[i32; 64]; 64]; 2];
 
 /// Continuation history: indexed `[prev_piece][prev_to][piece][to]`, one table
 /// for the move made 1 ply ago and one for 2 plies ago. `i16` saturating with a
 /// `depth^2` bonus / `−depth^2` malus, clamped to ±16_000. 6*64*6*64*2 bytes =
 /// 294_912 bytes (~288 KiB) per table. Persists across moves (the feature):
-/// cleared only at `new()`.
+/// cleared only at [`SearchState::new`] / `ucinewgame`.
 type ContHist = [[[[i16; 64]; 6]; 64]; 6];
 
 /// Saturating-clamp bound for continuation-history entries.
@@ -153,6 +156,67 @@ fn zeroed_cont_hist() -> Box<ContHist> {
         .into_boxed_slice()
         .try_into()
         .unwrap_or_else(|_| unreachable!("len 6 -> [_; 6]"))
+}
+
+/// Move-ordering history that PERSISTS across moves within one game (T7).
+///
+/// Butterfly + the two continuation-history tables used to live as per-`go`
+/// fields on [`SearchThread`], allocated fresh each search — which threw away
+/// their cross-move signal (the Plan-6 review note: conthist warm-start). They
+/// now live here. The UCI layer owns one `SearchState`, hands it into the
+/// search thread for the duration of a `go`, and reclaims it at join (the
+/// search threads never overlap — the loop joins before the next `go`). The TT
+/// is already persistent (Arc-shared); this brings histories to parity.
+///
+/// `new()` produces zeroed tables — that is what `search_to_depth`/bench use,
+/// so single-search behaviour and the bench fingerprint are unchanged. Across
+/// moves the prior search's tables are reused (warm start); `clear()`
+/// (`ucinewgame`) returns to the zeroed state for a fresh game.
+pub struct SearchState {
+    history: Box<HistoryTable>,
+    cont_hist1: Box<ContHist>,
+    cont_hist2: Box<ContHist>,
+}
+
+impl SearchState {
+    pub fn new() -> SearchState {
+        SearchState {
+            history: Box::new([[[0; 64]; 64]; 2]),
+            cont_hist1: zeroed_cont_hist(),
+            cont_hist2: zeroed_cont_hist(),
+        }
+    }
+
+    /// Reset to a fresh game (called on `ucinewgame`): zero every table so the
+    /// next game does not inherit the previous game's move-ordering bias.
+    pub fn clear(&mut self) {
+        *self.history = [[[0; 64]; 64]; 2];
+        *self.cont_hist1 = [[[[0; 64]; 6]; 64]; 6];
+        *self.cont_hist2 = [[[[0; 64]; 6]; 64]; 6];
+    }
+
+    /// Count of non-zero continuation-history entries across both tables. Used
+    /// by the UCI `histsum` debug command (the T7 persistence integration test
+    /// reads it: non-zero after a search, surviving into the next `go`, and
+    /// zero again after `ucinewgame`). Cheap relative to a search; not on any
+    /// hot path.
+    pub fn conthist_nonzero(&self) -> u64 {
+        let count = |t: &ContHist| -> u64 {
+            t.iter()
+                .flatten()
+                .flatten()
+                .flatten()
+                .filter(|&&c| c != 0)
+                .count() as u64
+        };
+        count(&self.cont_hist1) + count(&self.cont_hist2)
+    }
+}
+
+impl Default for SearchState {
+    fn default() -> SearchState {
+        SearchState::new()
+    }
 }
 
 /// Saturating-add `bonus` into one continuation-history entry, clamped to
@@ -316,9 +380,10 @@ pub struct SearchThread<E: Evaluator> {
     /// Syzygy tablebases (`SyzygyPath`); `None` = off. Shared read-only with
     /// the UCI layer, so an `Arc`.
     tb: Option<Arc<crate::tb::Tb>>,
-    history: Box<HistoryTable>,
-    cont_hist1: Box<ContHist>,
-    cont_hist2: Box<ContHist>,
+    /// Move-ordering history (butterfly + the two conthist tables). Persists
+    /// across moves: the UCI layer keeps it alive between `go`s (T7). Bench and
+    /// `search_to_depth` build a SearchThread with a fresh, zeroed state.
+    state: SearchState,
     /// Move-time telemetry from the last `iterate` call: (base soft, hard) ms
     /// and ms actually spent. Read by the UCI layer for the per-move
     /// `info string time` line (the clock-collapse field instrument).
@@ -341,12 +406,24 @@ impl<E: Evaluator> SearchThread<E> {
             stack: Box::new([StackEntry::EMPTY; MAX_PLY]),
             tt: Arc::new(Tt::new(16)),
             tb: None,
-            history: Box::new([[[0; 64]; 64]; 2]),
-            cont_hist1: zeroed_cont_hist(),
-            cont_hist2: zeroed_cont_hist(),
+            state: SearchState::new(),
             last_budgets_ms: (None, None),
             last_used_ms: 0,
         }
+    }
+
+    /// Install a persistent [`SearchState`] (the UCI layer's cross-move
+    /// histories), replacing the fresh one built by `new()`. Used by the `go`
+    /// path so move ordering warm-starts from the prior search.
+    pub fn set_state(&mut self, state: SearchState) {
+        self.state = state;
+    }
+
+    /// Reclaim the [`SearchState`] after a search so the UCI layer can keep it
+    /// alive for the next move. Leaves a fresh state behind (this SearchThread
+    /// is dropped immediately after, so the replacement is never searched).
+    pub fn take_state(&mut self) -> SearchState {
+        std::mem::take(&mut self.state)
     }
 
     /// Move-time telemetry from the last [`iterate`](Self::iterate):
@@ -629,9 +706,9 @@ impl<E: Evaluator> SearchThread<E> {
             &self.pos,
             tt_move,
             killers,
-            &self.history,
-            &self.cont_hist1,
-            &self.cont_hist2,
+            &self.state.history,
+            &self.state.cont_hist1,
+            &self.state.cont_hist2,
             ch1,
             ch2,
             stm,
@@ -709,8 +786,8 @@ impl<E: Evaluator> SearchThread<E> {
                                 k[1] = k[0];
                                 k[0] = mv;
                             }
-                            let h = &mut self.history[self.pos.stm().index()][mv.from().index()]
-                                [mv.to().index()];
+                            let h = &mut self.state.history[self.pos.stm().index()]
+                                [mv.from().index()][mv.to().index()];
                             *h = (*h + depth * depth).min(799_999);
                         }
                         // continuation history: bump the cutoff quiet, malus the
@@ -721,7 +798,7 @@ impl<E: Evaluator> SearchThread<E> {
                             let to = mv.to();
                             if let Some(parent) = ch1 {
                                 bump_cont_hist(
-                                    &mut self.cont_hist1,
+                                    &mut self.state.cont_hist1,
                                     parent,
                                     moved_piece,
                                     to,
@@ -730,7 +807,7 @@ impl<E: Evaluator> SearchThread<E> {
                             }
                             if let Some(parent) = ch2 {
                                 bump_cont_hist(
-                                    &mut self.cont_hist2,
+                                    &mut self.state.cont_hist2,
                                     parent,
                                     moved_piece,
                                     to,
@@ -743,7 +820,7 @@ impl<E: Evaluator> SearchThread<E> {
                                 }
                                 if let Some(parent) = ch1 {
                                     bump_cont_hist(
-                                        &mut self.cont_hist1,
+                                        &mut self.state.cont_hist1,
                                         parent,
                                         tq_piece,
                                         tq_mv.to(),
@@ -752,7 +829,7 @@ impl<E: Evaluator> SearchThread<E> {
                                 }
                                 if let Some(parent) = ch2 {
                                     bump_cont_hist(
-                                        &mut self.cont_hist2,
+                                        &mut self.state.cont_hist2,
                                         parent,
                                         tq_piece,
                                         tq_mv.to(),
@@ -872,9 +949,9 @@ impl<E: Evaluator> SearchThread<E> {
             &self.pos,
             tt_move,
             [Move::NULL; 2],
-            &self.history,
-            &self.cont_hist1,
-            &self.cont_hist2,
+            &self.state.history,
+            &self.state.cont_hist1,
+            &self.state.cont_hist2,
             None,
             None,
             stm,
@@ -1251,11 +1328,13 @@ mod tests {
         let score = st.negamax(1, -INF, 5_000, 2);
         assert!(score >= 5_000, "e2e4 produced a beta cutoff (got {score})");
 
-        let bf = st.history[Color::White.index()][e2e4.from().index()][to.index()];
+        let bf = st.state.history[Color::White.index()][e2e4.from().index()][to.index()];
         assert!(bf > 0, "butterfly history bumped (got {bf})");
-        let c1 = st.cont_hist1[ch1_key.0.index()][ch1_key.1.index()][piece.index()][to.index()];
+        let c1 =
+            st.state.cont_hist1[ch1_key.0.index()][ch1_key.1.index()][piece.index()][to.index()];
         assert!(c1 > 0, "cont_hist1 bumped (got {c1})");
-        let c2 = st.cont_hist2[ch2_key.0.index()][ch2_key.1.index()][piece.index()][to.index()];
+        let c2 =
+            st.state.cont_hist2[ch2_key.0.index()][ch2_key.1.index()][piece.index()][to.index()];
         assert!(c2 > 0, "cont_hist2 bumped (got {c2})");
     }
 
@@ -1269,7 +1348,7 @@ mod tests {
         let (ch2_key, ch1_key) = prime_conthist_parents(&mut st);
         let kf1 = find_uci_move(&st.pos, "e1f1").unwrap(); // quiet king move
                                                            // sort the king move first via a large butterfly score
-        st.history[Color::White.index()][kf1.from().index()][kf1.to().index()] = 1_000_000;
+        st.state.history[Color::White.index()][kf1.from().index()][kf1.to().index()] = 1_000_000;
         let king_piece = PieceType::King;
         let kto = kf1.to();
 
@@ -1278,14 +1357,14 @@ mod tests {
 
         // the king move was tried first, failed low, so both conthist tables
         // record a NEGATIVE malus for it
-        let c1 =
-            st.cont_hist1[ch1_key.0.index()][ch1_key.1.index()][king_piece.index()][kto.index()];
+        let c1 = st.state.cont_hist1[ch1_key.0.index()][ch1_key.1.index()][king_piece.index()]
+            [kto.index()];
         assert!(
             c1 < 0,
             "cont_hist1 malus on tried-but-failed quiet (got {c1})"
         );
-        let c2 =
-            st.cont_hist2[ch2_key.0.index()][ch2_key.1.index()][king_piece.index()][kto.index()];
+        let c2 = st.state.cont_hist2[ch2_key.0.index()][ch2_key.1.index()][king_piece.index()]
+            [kto.index()];
         assert!(
             c2 < 0,
             "cont_hist2 malus on tried-but-failed quiet (got {c2})"
