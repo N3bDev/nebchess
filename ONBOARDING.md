@@ -42,14 +42,19 @@ session on the desktop, starting from §8 below.
 | RAM | **32 GB** | Comfortable for data-gen and CPU-side training; fine for GPU training data pipelines. |
 | GPU | **RTX 5080** (Blackwell, 16 GB VRAM, CUDA) | **The reason for the move.** Standard GPU NNUE training (the `bullet` trainer or PyTorch-CUDA) is fast here. Blackwell is `sm_120` — needs a **current CUDA 12.x toolkit + latest NVIDIA driver**; PyTorch needs a recent cu12x build (nightly if a stable wheel doesn't yet ship Blackwell kernels). Confirm `nvidia-smi` + a tiny CUDA tensor op early. |
 
-**Recommended OS environment (assumption — correct me if wrong):** **WSL2 Ubuntu**
-on the desktop, matching the current laptop setup, with **CUDA-on-WSL2** (install
-the NVIDIA *Windows* driver with WSL support; do NOT install a Linux GPU driver
-inside WSL). This gives one environment for the Rust engine, fastchess/SPRT, and
-GPU training. Native Linux works identically; native-Windows would split the
-toolchain (engine builds fine on Windows, but the bash `tools/*.sh` harnesses
-assume a POSIX shell). If the desktop is native Windows without WSL2, say so and
-the new session will adapt the harness invocations.
+**OS environment (CONFIRMED 2026-06-08): WSL2 Ubuntu** on the desktop, matching
+the laptop, with **CUDA-on-WSL2** for the RTX 5080. One environment for the Rust
+engine, fastchess/SPRT, and GPU training. Setup order that matters:
+1. Install the latest **NVIDIA *Windows* driver** (the build with WSL2 CUDA
+   support). Do **NOT** install a Linux GPU driver inside WSL — the Windows
+   driver projects the GPU into WSL automatically.
+2. In WSL2 Ubuntu install the **CUDA 12.x toolkit** (the `wsl-ubuntu` variant,
+   *no* bundled driver). Verify: `nvidia-smi` lists the 5080, and a tiny CUDA op
+   runs (e.g. `python -c "import torch; print(torch.cuda.get_device_name())"`).
+3. **Blackwell caveat (`sm_120`, new):** use a current CUDA 12.x; for PyTorch use
+   a recent **cu12x / nightly** wheel that ships Blackwell kernels; for the Rust
+   `bullet` trainer, build against the installed CUDA toolkit. Confirm a GPU
+   op works *before* investing in a long training run.
 
 ---
 
