@@ -2,6 +2,10 @@
 //! Emits `FEN | cp_white | wdl_white` text shards from engine self-play.
 //! Reproducible given (--seed, --threads, --games). No GPU, no new deps.
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use nebchess::board::{generate_moves, movegen::find_first_legal, Move, MoveList, Position};
 use nebchess::board::types::Color;
 use nebchess::eval::Hce;
@@ -10,9 +14,7 @@ use nebchess::search::SearchThread;
 use nebchess::tb::{Tb, Wdl};
 
 /// Seeded SplitMix64 (adapted from src/bin/find_magics.rs).
-#[allow(dead_code)]
 struct Rng(u64);
-#[allow(dead_code)]
 impl Rng {
     fn new(seed: u64) -> Rng {
         Rng(seed)
@@ -31,7 +33,6 @@ impl Rng {
 }
 
 /// Pick a uniformly-random LEGAL move (generate_moves is pseudo-legal; filter via make/unmake).
-#[allow(dead_code)]
 fn random_legal_move(pos: &mut Position, rng: &mut Rng) -> Option<Move> {
     let mut pseudo = MoveList::new();
     generate_moves(pos, &mut pseudo);
@@ -51,7 +52,6 @@ fn random_legal_move(pos: &mut Position, rng: &mut Rng) -> Option<Move> {
 
 /// Play `plies` random legal half-moves from the start position. Returns None if a
 /// terminal position (mate/stalemate) is hit during the opening (caller skips the game).
-#[allow(dead_code)]
 fn play_random_opening(rng: &mut Rng, plies: usize) -> Option<Position> {
     let mut pos = Position::startpos();
     for _ in 0..plies {
@@ -61,7 +61,6 @@ fn play_random_opening(rng: &mut Rng, plies: usize) -> Option<Position> {
     Some(pos)
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Outcome {
     WhiteWin,
@@ -69,7 +68,6 @@ enum Outcome {
     BlackWin,
 }
 
-#[allow(dead_code)]
 fn outcome_to_wdl(o: Outcome) -> f32 {
     match o {
         Outcome::WhiteWin => 1.0,
@@ -79,7 +77,6 @@ fn outcome_to_wdl(o: Outcome) -> f32 {
 }
 
 /// Side-to-move-relative TB result -> white-relative outcome.
-#[allow(dead_code)]
 fn wdl_to_outcome(stm: Color, w: Wdl) -> Outcome {
     match w {
         Wdl::Draw => Outcome::Draw,
@@ -90,7 +87,6 @@ fn wdl_to_outcome(stm: Color, w: Wdl) -> Outcome {
 
 /// Natural game end for the side to move. Mate/stalemate first (terminal),
 /// then the draw rules. None if the game is ongoing.
-#[allow(dead_code)]
 fn terminal_outcome(pos: &mut Position) -> Option<Outcome> {
     if find_first_legal(pos).is_none() {
         return Some(if pos.in_check(pos.stm()) {
@@ -106,23 +102,19 @@ fn terminal_outcome(pos: &mut Position) -> Option<Outcome> {
 }
 
 /// Scores at or above this magnitude are mate/saturated and are not recorded.
-#[allow(dead_code)]
 const MATE_THRESHOLD: i32 = 29_000; // mirrors search::MATE_BOUND
 
 /// Convert a side-to-move-relative centipawn score to white-relative.
-#[allow(dead_code)]
 fn cp_white(stm: Color, score_cp: i32) -> i32 {
     if stm == Color::White { score_cp } else { -score_cp }
 }
 
 /// Smart-fen-skipping: record only QUIET, non-saturated positions where the
 /// side to move is not in check (the net learns quiet eval; search handles tactics).
-#[allow(dead_code)]
 fn should_record(pos: &Position, best: Move, score_cp: i32) -> bool {
     !pos.in_check(pos.stm()) && !best.is_capture() && score_cp.abs() < MATE_THRESHOLD
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 struct Config {
     soft_nodes: u64,
@@ -141,7 +133,6 @@ impl Default for Config {
 /// Play one self-play game; push `(fen, cp_white, wdl_white)` for each kept position.
 /// Reuses the caller's SearchThread (and its TT) across games for throughput; this is
 /// deterministic per worker (single-threaded) and benign at ~5k nodes.
-#[allow(dead_code)]
 fn play_game(st: &mut SearchThread<Hce>, rng: &mut Rng, cfg: &Config,
              tb: Option<&Tb>, out: &mut Vec<(String, i32, f32)>) {
     // 1. Random opening (skip the game if it dead-ends during the opening).
@@ -196,8 +187,94 @@ fn play_game(st: &mut SearchThread<Hce>, rng: &mut Rng, cfg: &Config,
     }
 }
 
+struct Args {
+    out_dir: String,
+    games: u64,     // total games across all workers
+    threads: usize,
+    seed: u64,
+    tb_path: Option<String>,
+    cfg: Config,
+}
+
+fn parse_args() -> Args {
+    let mut a = Args {
+        out_dir: "tools/data/selfplay".to_string(),
+        games: 100_000,
+        threads: 22,
+        seed: 1,
+        tb_path: None,
+        cfg: Config::default(),
+    };
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    while i < argv.len() {
+        let flag = argv[i].clone();
+        match flag.as_str() {
+            "--out" => { i += 1; a.out_dir = argv.get(i).cloned().unwrap_or_default(); }
+            "--games" => { i += 1; a.games = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.games); }
+            "--threads" => { i += 1; a.threads = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.threads); }
+            "--seed" => { i += 1; a.seed = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.seed); }
+            "--nodes" => { i += 1; a.cfg.soft_nodes = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.soft_nodes); }
+            "--opening-plies" => { i += 1; a.cfg.opening_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.opening_plies); }
+            "--max-plies" => { i += 1; a.cfg.max_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.max_plies); }
+            "--resign-cp" => { i += 1; a.cfg.resign_cp = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.resign_cp); }
+            "--resign-plies" => { i += 1; a.cfg.resign_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.resign_plies); }
+            "--tb" => { i += 1; a.tb_path = argv.get(i).cloned(); }
+            "--help" | "-h" => {
+                eprintln!("usage: datagen [--out DIR] [--games N] [--threads T] [--seed S] [--nodes SOFT] [--opening-plies P] [--max-plies M] [--resign-cp CP] [--resign-plies N] [--tb PATH]");
+                std::process::exit(0);
+            }
+            other => eprintln!("datagen: ignoring unknown arg {other}"),
+        }
+        i += 1;
+    }
+    a.threads = a.threads.max(1);
+    a
+}
+
+fn worker(id: usize, seed: u64, games: u64, cfg: &Config, tb: Option<&Tb>,
+          out_dir: &str, total: &AtomicU64) {
+    let mut rng = Rng::new(seed);
+    let mut st = SearchThread::<Hce>::new(Position::startpos(), Hce::new());
+    let path = format!("{out_dir}/shard_{id:02}.txt");
+    let mut f = BufWriter::new(File::create(&path).expect("create shard"));
+    let mut buf: Vec<(String, i32, f32)> = Vec::new();
+    let mut written = 0u64;
+    for _ in 0..games {
+        buf.clear();
+        play_game(&mut st, &mut rng, cfg, tb, &mut buf);
+        for (fen, cp, wdl) in &buf {
+            writeln!(f, "{fen} | {cp} | {wdl:.1}").expect("write shard");
+        }
+        written += buf.len() as u64;
+    }
+    f.flush().expect("flush shard");
+    total.fetch_add(written, Ordering::Relaxed);
+    eprintln!("worker {id}: {written} positions -> {path}");
+}
+
 fn main() {
-    eprintln!("datagen: see plan-9; run with --help (subcommands land in later tasks)");
+    let args = parse_args();
+    std::fs::create_dir_all(&args.out_dir).expect("create out dir");
+    let tb = args.tb_path.as_deref().and_then(Tb::init);
+    if args.tb_path.is_some() {
+        eprintln!("datagen: TB adjudication {}", if tb.is_some() { "ENABLED" } else { "DISABLED (init failed)" });
+    }
+    let total = AtomicU64::new(0);
+    let t = args.threads;
+    let base = args.games / t as u64;
+    let rem = args.games % t as u64;
+
+    std::thread::scope(|s| {
+        for w in 0..t {
+            // Distinct stream per worker; fixed per-worker quota -> reproducible given (seed, threads, games).
+            let seed = args.seed.wrapping_add((w as u64).wrapping_mul(0x9E3779B97F4A7C15));
+            let games = base + if (w as u64) < rem { 1 } else { 0 };
+            let (cfg, tb_ref, out_dir, total_ref) = (&args.cfg, tb.as_ref(), &args.out_dir, &total);
+            s.spawn(move || worker(w, seed, games, cfg, tb_ref, out_dir, total_ref));
+        }
+    });
+    println!("datagen done: {} positions across {} shards in {}", total.load(Ordering::Relaxed), t, args.out_dir);
 }
 
 #[cfg(test)]
