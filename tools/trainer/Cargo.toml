@@ -1,0 +1,12 @@
+# Standalone offline trainer — EXCLUDED from the engine build.
+# The empty [workspace] makes this its own workspace root, so `cargo build`
+# in the repo root (the nebchess engine) never descends here or pulls bullet/CUDA.
+[workspace]
+
+[package]
+name = "nebchess-trainer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bullet = { git = "https://github.com/jw1912/bullet", package = "bullet_lib", rev = "d835890cad21b919b0ba00258c4fc0a3d2712139", features = ["cuda"] }
