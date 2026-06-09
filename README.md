@@ -1,6 +1,6 @@
 # NebChess
 
-A from-scratch UCI chess engine in Rust. Measured **2827 ± 16** (10+0.1, anchored vs a 3-family pool, engine-default config — book/Syzygy are live-deploy multipliers on top; see docs/strength-log.md for caveats). **M6 target: 2900 (stretch 3000).**
+A from-scratch UCI chess engine in Rust with a self-play-trained **NNUE** evaluation. Measured **2993 ± 17** (10+0.1, anchored vs a 3-family pool, engine-default config — book/Syzygy are live-deploy multipliers on top; see docs/strength-log.md for caveats). **M8 (NNUE) cleared the 2900 target — the 3000 stretch goal sits inside the error band; M9 net-scaling closes it.**
 
 Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/superpowers/specs/2026-06-04-nebchess-engine-design.md)
 
@@ -14,7 +14,9 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M5: full HCE evaluation + Texel tuning at scale
 - [x] M6a: bracketed measurement + search polish (SEE, conthist; LMR/extensions/futility-v2 honestly H0'd)
 - [x] M6b: TimeBrain + bot readiness (book, Syzygy, pondering, Lichess hardening)
-- [ ] M7: eval round 2 (outposts, king-attack rework, gated check extensions) + deeper-search retries (singular, futility v2) + TimeBrain-v2 (Lichess-tuned) + desktop migration
+- [x] M7: desktop migration (RTX 5080); TimeBrain-v2 attempted → de-scoped (NebChess is time-elastic — banking time costs strength)
+- [x] M8: **NNUE evaluation** — self-play-trained `(768→768)x2→1` SCReLU net, **+165 anchored (2827→2993)**, replaces HCE
+- [ ] M9: NNUE scaling (larger hidden layer, output/king buckets, datagen→train→promote loop) → push past 3000
 
 ## Play against it
 
