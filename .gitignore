@@ -6,6 +6,12 @@
 /tools/tb/
 *.bin
 !/src/eval/nnue/net1.bin
+.env
+/tools/lichess/venv/
+/tools/lichess/lichess-bot/
+/tools/lichess/nebchess-live
+/tools/lichess/*.log
+/tools/lichess/matchmaker-state.json
 __pycache__/
 .claude/
 /tools/*.pgn

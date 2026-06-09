@@ -1,0 +1,59 @@
+# NebChess lichess-bot configuration (deploy config: book + Syzygy + ponder).
+# NO SECRETS HERE: the token comes from the LICHESS_BOT_TOKEN env var, which
+# run.sh exports from the repo-root .env (gitignored). The placeholder below is
+# overridden by the env var at startup (lib/config.py).
+# Matchmaking is handled by our own matchmaker.py (exact 24h game budget);
+# the client's built-in matchmaking stays off.
+
+token: "set-via-LICHESS_BOT_TOKEN-env"
+url: "https://lichess.org/"
+
+engine:
+  dir: "/home/witt/claude-workspace/NebChess/tools/lichess/"
+  name: "nebchess-live"            # snapshot copy made by deploy.sh (never target/release directly)
+  protocol: "uci"
+  ponder: true                     # think on the opponent's time
+
+  polyglot:
+    enabled: false                 # the engine uses its OWN book (BookFile below)
+
+  draw_or_resign:
+    resign_enabled: false          # play on; with Syzygy the engine converts/holds correctly
+    offer_draw_enabled: true
+    offer_draw_score: 0
+    offer_draw_moves: 10
+    offer_draw_pieces: 10
+
+  uci_options:
+    Threads: 1
+    Hash: 256
+    "Move Overhead": 100           # engine-internal margin; network latency is covered by move_overhead below
+    BookFile: "/home/witt/claude-workspace/NebChess/tools/books/nebbook.bin"
+    BookDepth: 16
+    SyzygyPath: "/home/witt/claude-workspace/NebChess/tools/tb"
+
+abort_time: 30
+fake_think_time: false
+rate_limiting_delay: 0
+move_overhead: 1500                # ms subtracted by the client for network/API latency
+
+challenge:                         # incoming challenges (count against the daily budget via the API)
+  concurrency: 1                   # one game at a time — single engine instance
+  sort_by: "best"
+  accept_bot: true
+  only_bot: true                   # bot arena only; flip to false to also accept humans
+  max_increment: 10
+  min_increment: 1                 # require increment — clock safety on WSL2
+  max_base: 900
+  min_base: 180                    # blitz/rapid only; no bullet (timing jitter)
+  variants:
+    - standard
+  time_controls:
+    - blitz
+    - rapid
+  modes:
+    - rated
+    - casual
+
+matchmaking:
+  allow_matchmaking: false         # matchmaker.py owns challenge pacing (exact 96/day budget)
