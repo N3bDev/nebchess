@@ -23,3 +23,4 @@ pub trait Evaluator {
 }
 
 pub use hce::Hce;
+pub use nnue::NnueEvaluator;
