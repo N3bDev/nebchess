@@ -1228,6 +1228,12 @@ impl<E: Evaluator> SearchThread<E> {
             if self.past_ponder_soft() {
                 break;
             }
+            // Soft node limit: finish this iteration, then stop before starting a deeper one.
+            if let Some(sn) = limits.soft_nodes {
+                if self.nodes >= sn {
+                    break;
+                }
+            }
             if score.abs() >= MATE_BOUND {
                 break; // forced mate found; deeper search can't change it
             }
@@ -1470,6 +1476,41 @@ mod tests {
         assert!(
             c2 < 0,
             "cont_hist2 malus on tried-but-failed quiet (got {c2})"
+        );
+    }
+
+    #[test]
+    fn soft_node_limit_shortens_search() {
+        use crate::eval::Hce;
+
+        let small = {
+            let mut st = SearchThread::new(Position::startpos(), Hce::new());
+            st.iterate(
+                &Limits {
+                    soft_nodes: Some(1),
+                    depth: Some(10),
+                    ..Limits::default()
+                },
+                |_| {},
+            );
+            st.nodes
+        };
+        let big = {
+            let mut st = SearchThread::new(Position::startpos(), Hce::new());
+            st.iterate(
+                &Limits {
+                    soft_nodes: Some(2_000_000),
+                    depth: Some(10),
+                    ..Limits::default()
+                },
+                |_| {},
+            );
+            st.nodes
+        };
+        assert!(small >= 1, "did at least one iteration");
+        assert!(
+            small < big,
+            "soft_nodes=1 ({small}) must search far less than soft_nodes=2M ({big})"
         );
     }
 }

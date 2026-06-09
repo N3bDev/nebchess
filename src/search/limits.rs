@@ -20,6 +20,9 @@ use crate::board::Color;
 pub struct Limits {
     pub depth: Option<i32>,
     pub nodes: Option<u64>,
+    /// Stop at the NEXT depth-iteration boundary once `self.nodes` exceeds this.
+    /// Unlike `nodes` (a hard mid-search cutoff), this lets the current iteration finish.
+    pub soft_nodes: Option<u64>,
     pub movetime: Option<u64>, // ms
     pub wtime: Option<u64>,
     pub btime: Option<u64>,
