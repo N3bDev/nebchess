@@ -2,7 +2,9 @@
 //! Emits `FEN | cp_white | wdl_white` text shards from engine self-play.
 //! Reproducible given (--seed, --threads, --games). No GPU, no new deps.
 
-use nebchess::board::{generate_moves, Move, MoveList, Position};
+use nebchess::board::{generate_moves, movegen::find_first_legal, Move, MoveList, Position};
+use nebchess::board::types::Color;
+use nebchess::tb::Wdl;
 
 /// Seeded SplitMix64 (adapted from src/bin/find_magics.rs).
 #[allow(dead_code)]
@@ -56,6 +58,50 @@ fn play_random_opening(rng: &mut Rng, plies: usize) -> Option<Position> {
     Some(pos)
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Outcome {
+    WhiteWin,
+    Draw,
+    BlackWin,
+}
+
+#[allow(dead_code)]
+fn outcome_to_wdl(o: Outcome) -> f32 {
+    match o {
+        Outcome::WhiteWin => 1.0,
+        Outcome::Draw => 0.5,
+        Outcome::BlackWin => 0.0,
+    }
+}
+
+/// Side-to-move-relative TB result -> white-relative outcome.
+#[allow(dead_code)]
+fn wdl_to_outcome(stm: Color, w: Wdl) -> Outcome {
+    match w {
+        Wdl::Draw => Outcome::Draw,
+        Wdl::Win => if stm == Color::White { Outcome::WhiteWin } else { Outcome::BlackWin },
+        Wdl::Loss => if stm == Color::White { Outcome::BlackWin } else { Outcome::WhiteWin },
+    }
+}
+
+/// Natural game end for the side to move. Mate/stalemate first (terminal),
+/// then the draw rules. None if the game is ongoing.
+#[allow(dead_code)]
+fn terminal_outcome(pos: &mut Position) -> Option<Outcome> {
+    if find_first_legal(pos).is_none() {
+        return Some(if pos.in_check(pos.stm()) {
+            if pos.stm() == Color::White { Outcome::BlackWin } else { Outcome::WhiteWin }
+        } else {
+            Outcome::Draw // stalemate
+        });
+    }
+    if pos.is_fifty_move_draw() || pos.is_repetition() || pos.is_insufficient_material() {
+        return Some(Outcome::Draw);
+    }
+    None
+}
+
 fn main() {
     eprintln!("datagen: see plan-9; run with --help (subcommands land in later tasks)");
 }
@@ -63,7 +109,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nebchess::board::types::Color;
 
     #[test]
     fn rng_is_deterministic_and_bounded() {
@@ -91,6 +136,34 @@ mod tests {
         assert!(pos.make(mv), "returned move must be legal");
         pos.unmake();
         assert_eq!(pick(1), pick(1), "same seed -> same pick");
+    }
+
+    #[test]
+    fn terminal_outcome_detects_endings() {
+        // Fool's mate: White to move, checkmated -> Black wins.
+        let mut mate = Position::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
+        assert_eq!(terminal_outcome(&mut mate), Some(Outcome::BlackWin));
+
+        // Stalemate: Black to move, not in check, no legal moves -> Draw.
+        let mut stale = Position::from_fen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        assert_eq!(terminal_outcome(&mut stale), Some(Outcome::Draw));
+
+        // KvK insufficient material -> Draw.
+        let mut kvk = Position::from_fen("8/8/4k3/8/8/3K4/8/8 w - - 0 1").unwrap();
+        assert_eq!(terminal_outcome(&mut kvk), Some(Outcome::Draw));
+
+        // Start position is ongoing.
+        let mut start = Position::startpos();
+        assert_eq!(terminal_outcome(&mut start), None);
+    }
+
+    #[test]
+    fn wdl_maps_to_white_relative_outcome() {
+        assert_eq!(wdl_to_outcome(Color::White, Wdl::Win), Outcome::WhiteWin);
+        assert_eq!(wdl_to_outcome(Color::Black, Wdl::Win), Outcome::BlackWin);
+        assert_eq!(wdl_to_outcome(Color::White, Wdl::Loss), Outcome::BlackWin);
+        assert_eq!(wdl_to_outcome(Color::Black, Wdl::Loss), Outcome::WhiteWin);
+        assert_eq!(wdl_to_outcome(Color::White, Wdl::Draw), Outcome::Draw);
     }
 
     #[test]
