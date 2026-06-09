@@ -210,7 +210,7 @@ fn parse_args() -> Args {
     while i < argv.len() {
         let flag = argv[i].clone();
         match flag.as_str() {
-            "--out" => { i += 1; a.out_dir = argv.get(i).cloned().unwrap_or_default(); }
+            "--out" => { i += 1; if let Some(v) = argv.get(i) { a.out_dir = v.clone(); } }
             "--games" => { i += 1; a.games = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.games); }
             "--threads" => { i += 1; a.threads = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.threads); }
             "--seed" => { i += 1; a.seed = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.seed); }
@@ -253,7 +253,50 @@ fn worker(id: usize, seed: u64, games: u64, cfg: &Config, tb: Option<&Tb>,
     eprintln!("worker {id}: {written} positions -> {path}");
 }
 
+fn run_stats(dir: &str) {
+    use std::io::{BufRead, BufReader};
+    let (mut n, mut in_check, mut bad_fen, mut wins, mut draws, mut losses) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut cp_min, mut cp_max, mut cp_sum) = (i32::MAX, i32::MIN, 0i64);
+    for entry in std::fs::read_dir(dir).expect("read out dir") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") { continue; }
+        for line in BufReader::new(File::open(&path).unwrap()).lines() {
+            let line = line.unwrap();
+            let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+            if parts.len() != 3 { continue; }
+            n += 1;
+            match Position::from_fen(parts[0]) {
+                Ok(pos) => if pos.in_check(pos.stm()) { in_check += 1; },
+                Err(_) => { bad_fen += 1; continue; }
+            }
+            if let Ok(cp) = parts[1].parse::<i32>() {
+                cp_min = cp_min.min(cp);
+                cp_max = cp_max.max(cp);
+                cp_sum += cp as i64;
+            }
+            match parts[2] {
+                "1.0" => wins += 1,
+                "0.5" => draws += 1,
+                "0.0" => losses += 1,
+                _ => {}
+            }
+        }
+    }
+    let pct = |x: u64| if n > 0 { 100.0 * x as f64 / n as f64 } else { 0.0 };
+    println!("positions: {n}");
+    println!("white W/D/L: {:.1}% / {:.1}% / {:.1}%", pct(wins), pct(draws), pct(losses));
+    println!("cp white: min {cp_min} max {cp_max} mean {:.1}", if n > 0 { cp_sum as f64 / n as f64 } else { 0.0 });
+    println!("LEAKS -> in-check: {in_check}  bad-fen: {bad_fen}  (both MUST be 0)");
+    assert_eq!(in_check, 0, "in-check positions leaked into the data");
+    assert_eq!(bad_fen, 0, "unparseable FENs in the data");
+}
+
 fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(|s| s.as_str()) == Some("stats") {
+        run_stats(argv.get(1).map(|s| s.as_str()).unwrap_or("tools/data/selfplay"));
+        return;
+    }
     let args = parse_args();
     std::fs::create_dir_all(&args.out_dir).expect("create out dir");
     let tb = args.tb_path.as_deref().and_then(Tb::init);
