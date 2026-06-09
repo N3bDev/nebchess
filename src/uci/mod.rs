@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::board::movegen::find_uci_move;
 use crate::board::{Color, Move, Position};
 use crate::book::Book;
-use crate::eval::Hce;
+use crate::eval::NnueEvaluator;
 use crate::search::limits::{Limits, TimeManager};
 use crate::search::tt::Tt;
 use crate::search::{
@@ -371,7 +371,7 @@ impl Uci {
         // (wtime/btime/incs/movestogo — parsed into the same Limits) so
         // `ponderhit` can budget the time at the moment the opponent replies.
         let limits = parse_go(line);
-        let mut st = SearchThread::new(self.pos.clone(), Hce::new());
+        let mut st = SearchThread::new(self.pos.clone(), NnueEvaluator::embedded());
         st.set_stop_flag(Arc::clone(&self.stop));
         st.set_overhead_ms(self.overhead_ms);
         st.set_tt(Arc::clone(&self.tt));

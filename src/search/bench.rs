@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use crate::board::Position;
-use crate::eval::Hce;
+use crate::eval::NnueEvaluator;
 use crate::search::SearchThread;
 
 pub const BENCH_DEPTH: i32 = 6;
@@ -30,7 +30,7 @@ pub fn run() {
     let mut total: u64 = 0;
     for (i, fen) in BENCH_FENS.iter().enumerate() {
         let pos = Position::from_fen(fen).expect("bench FEN");
-        let mut st = SearchThread::new(pos, Hce::new());
+        let mut st = SearchThread::new(pos, NnueEvaluator::embedded());
         let (_best, _score) = st.search_to_depth(BENCH_DEPTH);
         println!("position {:>2}: {:>10} nodes", i + 1, st.nodes);
         total += st.nodes;

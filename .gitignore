@@ -5,6 +5,7 @@
 /tools/data/
 /tools/tb/
 *.bin
+!/src/eval/nnue/net1.bin
 __pycache__/
 .claude/
 /tools/*.pgn

@@ -21,6 +21,11 @@ impl NnueEvaluator {
         let stack = vec![AccPair::fresh(&net); MAX_PLY + 1].into_boxed_slice();
         NnueEvaluator { net, stack, top: 0 }
     }
+
+    /// The shipped network, embedded at compile time.
+    pub fn embedded() -> NnueEvaluator {
+        NnueEvaluator::from_bytes(include_bytes!("net1.bin"))
+    }
 }
 
 impl Evaluator for NnueEvaluator {
