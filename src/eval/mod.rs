@@ -5,6 +5,7 @@
 pub mod eval_params;
 pub mod hce;
 pub mod manifest;
+pub mod nnue;
 pub mod trace;
 
 use crate::board::{Move, Position};
