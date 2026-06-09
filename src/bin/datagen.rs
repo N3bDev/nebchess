@@ -1,4 +1,6 @@
-//! plan-9: self-play training-data generator for NNUE. Dev-only binary.
+//! plan-9 / M9 flywheel: self-play training-data generator. Dev-only binary.
+//! Self-plays with the embedded NNUE net (`NnueEvaluator::embedded`), so each
+//! flywheel turn regenerates data with the current shipped net.
 //! Emits `FEN | cp_white | wdl_white` text shards from engine self-play.
 //! Reproducible given (--seed, --threads, --games). No GPU, no new deps.
 
@@ -8,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use nebchess::board::{generate_moves, movegen::find_first_legal, Move, MoveList, Position};
 use nebchess::board::types::Color;
-use nebchess::eval::Hce;
+use nebchess::eval::NnueEvaluator;
 use nebchess::search::limits::Limits;
 use nebchess::search::SearchThread;
 use nebchess::tb::{Tb, Wdl};
@@ -133,7 +135,7 @@ impl Default for Config {
 /// Play one self-play game; push `(fen, cp_white, wdl_white)` for each kept position.
 /// Reuses the caller's SearchThread (and its TT) across games for throughput; this is
 /// deterministic per worker (single-threaded) and benign at ~5k nodes.
-fn play_game(st: &mut SearchThread<Hce>, rng: &mut Rng, cfg: &Config,
+fn play_game(st: &mut SearchThread<NnueEvaluator>, rng: &mut Rng, cfg: &Config,
              tb: Option<&Tb>, out: &mut Vec<(String, i32, f32)>) {
     // 1. Random opening (skip the game if it dead-ends during the opening).
     let Some(opening) = play_random_opening(rng, cfg.opening_plies) else { return };
@@ -235,7 +237,7 @@ fn parse_args() -> Args {
 fn worker(id: usize, seed: u64, games: u64, cfg: &Config, tb: Option<&Tb>,
           out_dir: &str, total: &AtomicU64) {
     let mut rng = Rng::new(seed);
-    let mut st = SearchThread::<Hce>::new(Position::startpos(), Hce::new());
+    let mut st = SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
     let path = format!("{out_dir}/shard_{id:02}.txt");
     let mut f = BufWriter::new(File::create(&path).expect("create shard"));
     let mut buf: Vec<(String, i32, f32)> = Vec::new();
@@ -410,7 +412,7 @@ mod tests {
         let cfg = Config { soft_nodes: 400, opening_plies: 4, max_plies: 60, ..Config::default() };
 
         let run = |seed: u64| {
-            let mut st = SearchThread::<Hce>::new(Position::startpos(), Hce::new());
+            let mut st = SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
             let mut rng = Rng::new(seed);
             let mut out = Vec::new();
             play_game(&mut st, &mut rng, &cfg, None, &mut out);
