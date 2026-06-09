@@ -39,6 +39,27 @@ impl Network {
             Box::from_raw(ptr)
         }
     }
+
+    #[inline]
+    fn screlu(x: i16) -> i32 {
+        let y = i32::from(x).clamp(0, i32::from(QA));
+        y * y
+    }
+
+    /// Quantised forward pass. `us`/`them` are the side-to-move / opponent accumulator halves.
+    /// Returns side-to-move-relative centipawns.
+    pub fn out(&self, us: &Accumulator, them: &Accumulator) -> i32 {
+        let sum = self.out_scalar(us, them);
+        (sum / i32::from(QA) + i32::from(self.output_bias)) * SCALE / (i32::from(QA) * i32::from(QB))
+    }
+
+    #[inline]
+    fn out_scalar(&self, us: &Accumulator, them: &Accumulator) -> i32 {
+        let mut sum = 0i32;
+        for (&i, &w) in us.vals.iter().zip(&self.output_weights[..HIDDEN]) { sum += Self::screlu(i) * i32::from(w); }
+        for (&i, &w) in them.vals.iter().zip(&self.output_weights[HIDDEN..]) { sum += Self::screlu(i) * i32::from(w); }
+        sum
+    }
 }
 
 #[cfg(test)]
@@ -56,5 +77,32 @@ mod tests {
         assert_eq!(bytes.len(), 1_184_320, "toy net must be the contract size");
         let net = Network::from_bytes(&bytes);
         let _ = net.feature_bias.vals[0];
+    }
+
+    fn reference_out(net: &Network, us: &Accumulator, them: &Accumulator) -> i32 {
+        // Verbatim port of bullet examples/simple.rs Network::evaluate — the canonical reference.
+        fn screlu(x: i16) -> i32 { let y = i32::from(x).clamp(0, i32::from(QA)); y * y }
+        let mut output = 0i32;
+        for (&i, &w) in us.vals.iter().zip(&net.output_weights[..HIDDEN]) { output += screlu(i) * i32::from(w); }
+        for (&i, &w) in them.vals.iter().zip(&net.output_weights[HIDDEN..]) { output += screlu(i) * i32::from(w); }
+        output /= i32::from(QA);
+        output += i32::from(net.output_bias);
+        output *= SCALE;
+        output /= i32::from(QA) * i32::from(QB);
+        output
+    }
+
+    #[test]
+    fn out_matches_reference() {
+        let Ok(bytes) = std::fs::read(TOY_NET) else { return };
+        let net = Network::from_bytes(&bytes);
+        let mut s = 0x1234_5678u64;
+        let mut rnd = || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; (s % 512) as i16 - 128 };
+        for _ in 0..64 {
+            let mut us = Accumulator { vals: [0; HIDDEN] };
+            let mut them = Accumulator { vals: [0; HIDDEN] };
+            for i in 0..HIDDEN { us.vals[i] = rnd(); them.vals[i] = rnd(); }
+            assert_eq!(net.out(&us, &them), reference_out(&net, &us, &them));
+        }
     }
 }
