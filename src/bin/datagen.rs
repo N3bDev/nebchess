@@ -102,6 +102,23 @@ fn terminal_outcome(pos: &mut Position) -> Option<Outcome> {
     None
 }
 
+/// Scores at or above this magnitude are mate/saturated and are not recorded.
+#[allow(dead_code)]
+const MATE_THRESHOLD: i32 = 29_000; // mirrors search::MATE_BOUND
+
+/// Convert a side-to-move-relative centipawn score to white-relative.
+#[allow(dead_code)]
+fn cp_white(stm: Color, score_cp: i32) -> i32 {
+    if stm == Color::White { score_cp } else { -score_cp }
+}
+
+/// Smart-fen-skipping: record only QUIET, non-saturated positions where the
+/// side to move is not in check (the net learns quiet eval; search handles tactics).
+#[allow(dead_code)]
+fn should_record(pos: &Position, best: Move, score_cp: i32) -> bool {
+    !pos.in_check(pos.stm()) && !best.is_capture() && score_cp.abs() < MATE_THRESHOLD
+}
+
 fn main() {
     eprintln!("datagen: see plan-9; run with --help (subcommands land in later tasks)");
 }
@@ -164,6 +181,31 @@ mod tests {
         assert_eq!(wdl_to_outcome(Color::White, Wdl::Loss), Outcome::BlackWin);
         assert_eq!(wdl_to_outcome(Color::Black, Wdl::Loss), Outcome::WhiteWin);
         assert_eq!(wdl_to_outcome(Color::White, Wdl::Draw), Outcome::Draw);
+    }
+
+    #[test]
+    fn cp_white_flips_for_black() {
+        assert_eq!(cp_white(Color::White, 30), 30);
+        assert_eq!(cp_white(Color::Black, 30), -30);
+    }
+
+    #[test]
+    fn filter_skips_check_capture_and_saturated() {
+        use nebchess::board::types::Square;
+
+        let e2 = Square::from_name("e2").unwrap();
+        let e4 = Square::from_name("e4").unwrap();
+        let quiet = Move::new(e2, e4, Move::QUIET);
+        let capture = Move::new(e2, e4, Move::CAPTURE);
+
+        let start = Position::startpos();
+        assert!(should_record(&start, quiet, 25), "quiet, in-bounds score -> record");
+        assert!(!should_record(&start, capture, 25), "best move is a capture -> skip");
+        assert!(!should_record(&start, quiet, 30_000), "saturated/mate score -> skip");
+
+        // Side to move in check -> skip.
+        let in_check = Position::from_fen("4k3/8/8/8/7q/8/8/4K3 w - - 0 1").unwrap();
+        assert!(!should_record(&in_check, quiet, 25), "stm in check -> skip");
     }
 
     #[test]
