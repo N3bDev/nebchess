@@ -174,6 +174,54 @@ mod tests {
         }
     }
 
+    // Find the first LEGAL move from `pos` matching `pick` (pos is left unchanged).
+    fn target(pos: &mut Position, pick: impl Fn(Move) -> bool) -> Move {
+        let mut list = MoveList::new();
+        generate_moves(pos, &mut list);
+        for &m in list.iter() {
+            if pos.make(m) {
+                pos.unmake();
+                if pick(m) { return m; }
+            }
+        }
+        panic!("no matching legal move in this position");
+    }
+
+    // Refresh, make the picked move + on_make, and assert incremental == a fresh refresh.
+    fn check_inc_eq_refresh(fen: &str, pick: impl Fn(Move) -> bool) {
+        let Ok(bytes) = std::fs::read(TOY) else { return };
+        let mut inc = NnueEvaluator::from_bytes(&bytes);
+        let mut chk = NnueEvaluator::from_bytes(&bytes);
+        let mut pos = Position::from_fen(fen).unwrap();
+        let mv = target(&mut pos, pick);
+        inc.refresh(&pos);          // accumulator for the pre-move position
+        pos.make(mv);
+        inc.on_make(mv, &pos);      // incremental update
+        chk.refresh(&pos);          // from-scratch on the post-move position
+        assert_eq!(inc.evaluate(&pos), chk.evaluate(&pos), "inc != refresh after {:?} from {fen}", mv);
+    }
+
+    #[test]
+    fn incremental_promotion() {
+        check_inc_eq_refresh("k7/4P3/8/8/8/8/8/4K3 w - - 0 1", |m| m.is_promotion() && !m.is_capture());
+    }
+    #[test]
+    fn incremental_promotion_capture() {
+        check_inc_eq_refresh("1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1", |m| m.is_promotion() && m.is_capture());
+    }
+    #[test]
+    fn incremental_en_passant() {
+        check_inc_eq_refresh("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1", |m| m.flag() == Move::EN_PASSANT);
+    }
+    #[test]
+    fn incremental_castle_kingside() {
+        check_inc_eq_refresh("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", |m| m.flag() == Move::KING_CASTLE);
+    }
+    #[test]
+    fn incremental_castle_queenside() {
+        check_inc_eq_refresh("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", |m| m.flag() == Move::QUEEN_CASTLE);
+    }
+
     #[test]
     fn null_move_needs_no_handling() {
         // Search makes null moves WITHOUT calling eval hooks. For a plain-768 net a null changes
