@@ -70,6 +70,8 @@ while IFS=' ' read -r anchor_name _rating; do
         Stash25)      anchor_bin="$ANCHOR_DIR/stash-25.0-linux-x86_64" ;;
         Weiss10)      anchor_bin="$ANCHOR_DIR/weiss-1.0-linux-x86_64" ;;
         Koivisto20)   anchor_bin="$ANCHOR_DIR/koivisto-2.0-linux-x86_64" ;;
+        Carp)         anchor_bin="$ANCHOR_DIR/carp-3.0.1-linux-x86_64" ;;
+        Midnight)     anchor_bin="$ANCHOR_DIR/midnight-6.0-linux-x86_64" ;;
         *)
             # Generic fallback: try a lowercase name match in anchor dir
             anchor_bin=$(find "$ANCHOR_DIR" -maxdepth 1 -type f -iname "*${anchor_name,,}*" | head -1 || true)

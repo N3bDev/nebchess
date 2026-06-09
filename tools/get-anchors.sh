@@ -4,35 +4,38 @@
 # PROTOCOL: Do not change engine versions without bumping this header and
 # re-running an anchored gauntlet — anchor ratings are version-specific.
 #
-# M6 MIXED POOL (the six rungs the gauntlet consumes via ratings.txt) — a
-# >=3-family pool replacing the M5 Stash-only ladder (style-monoculture fix):
-#   Stash19         2471   Stash    https://gitlab.com/mhouppin/stash-bot  (tag v19.2, bin v19.1)
-#   Stash20         2508   Stash    https://gitlab.com/mhouppin/stash-bot  (tag v20.0.1)
+# M9 MIXED POOL (the six rungs the gauntlet consumes via ratings.txt) — a
+# 5-family pool that drops M6's saturated Stash19/Stash20 bottom rungs and adds
+# a Carp ceiling + a Midnight mid rung (raises the top, widens the family mix):
 #   Stash21         2713   Stash    https://gitlab.com/mhouppin/stash-bot  (tag v21.2)  -- longitudinal spine
 #   Stash25         2934   Stash    https://gitlab.com/mhouppin/stash-bot  (tag v25.0)  -- same-family ceiling
 #   Weiss10         2898   Weiss    https://github.com/TerjeKir/weiss      (tag v1.0, SOURCE-BUILT)
 #   Koivisto20      2907   Koivisto https://github.com/Luecx/Koivisto      (tag v2.0, SOURCE-BUILT)
-# Pool shape: 6 rungs, 3 families (Stash/Weiss/Koivisto), 3 rungs >=2800
-# (Stash25 2934, Koivisto 2907, Weiss 2898). The Stash v19/v20/v21 spine stays
-# so deltas vs v0.5.0 remain interpretable; Stash25 brackets from above.
+#   Carp            3458   Carp     https://github.com/dede1751/carp       (tag v3.0.1, prebuilt V3/AVX2)
+#   Midnight        3055   Midnight https://github.com/archishou/MidnightChessEngine (branch v6, SOURCE-BUILT)
+# Pool shape: 6 rungs, 5 families (Stash/Weiss/Koivisto/Carp/Midnight), 4 rungs
+# >=2900 (Carp 3458, Midnight 3055, Stash25 2934, Koivisto 2907). The Stash
+# v21 spine stays so deltas vs prior milestones remain interpretable; Carp is
+# the new top bracket above the estimate.
 #
-# RATINGS ARE CCRL BLITZ (40/2) POINTS (1-CPU list — matches the gauntlet's
-# Threads=1), list COMPUTED 2025-12-20. Source: the
-# live list at computerchess.org.uk/ccrl/404/ is bot-protected (403/curl); the
-# 40/2 complete-list snapshot was read from web.archive.org (label "Back to CCRL
-# 40/2", "Computed on December 20, 2025 with Bayeselo"). Spine pins refreshed
-# from this list (were 2473/2509/2714 in M5; CCRL re-tuning is normal).
-# NOTE: the plan's guessed Stash v22~=2790 / v23~=2880 are UNVERIFIED and WRONG
-# as Blitz pins -- CCRL never tested Stash 22/23/24 on the Blitz list (it jumps
-# 21.0=2713 -> 25.0=2934). Stash 25.0 (2934, the next CCRL-rated same-family
-# rung) is used as the Stash ceiling instead. Re-pull before any public claim.
+# RATINGS ARE CCRL BLITZ 404 POINTS (1-CPU list — matches the gauntlet's
+# Threads=1), LIST SNAPSHOT 2026-06-06. The kept pins (Stash21 2713, Stash25
+# 2934, Weiss10 2898, Koivisto20 2907) are unchanged from M6 (confirmed dead-on
+# their current 404 values on this snapshot). NOTE on Stash21: our binary is
+# stash-21.2, but the 404 entry for 2713 is labeled "Stash 21.0" (21.2 lives on
+# the 40/15 list); 21.0 ~= 21.2 in strength, so the 2713 pin is correct.
+# NOTE: CCRL never tested Stash 22/23/24 on the Blitz list (it jumps 21.0=2713
+# -> 25.0=2934), so Stash 25.0 (2934) is used as the same-family ceiling.
+# Re-pull before any public claim.
 #
-# FETCHED BUT NOT IN THE M6 POOL (archival: downloaded/built + UCI-verified for
+# FETCHED BUT NOT IN THE M9 POOL (archival: downloaded/built + UCI-verified for
 # optional use, but kept OUT of ratings.txt so the gauntlet never plays them):
 #   RusticAlpha2  ~1815   https://codeberg.org/mvanthoor/rustic (alpha-3.0.0 CCRL zip)
 #   Stash13       ~1962   https://gitlab.com/mhouppin/stash-bot (tag v13)
-#   Stash15        2168   https://gitlab.com/mhouppin/stash-bot (tag v15) -- blowout rung, archival per M6
-#   Stash17        2294   https://gitlab.com/mhouppin/stash-bot (tag v17.0) -- blowout rung, archival per M6
+#   Stash15        2168   https://gitlab.com/mhouppin/stash-bot (tag v15) -- blowout rung, archival
+#   Stash17        2294   https://gitlab.com/mhouppin/stash-bot (tag v17.0) -- blowout rung, archival
+#   Stash19        2471   https://gitlab.com/mhouppin/stash-bot (tag v19.2, bin v19.1) -- saturated, dropped at M9
+#   Stash20        2508   https://gitlab.com/mhouppin/stash-bot (tag v20.0.1) -- saturated, dropped at M9
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -122,14 +125,17 @@ fi
 #    Tags: v13="v13", v15="v15", v17="v17.0", v19="v19.2" (binary v19.1),
 #          v20="v20.0.1", v21="v21.2", v25="v25.0". We pin the MAJOR version
 #          CCRL tested and use the latest minor of that major.
-#    M6 STASH POOL = v19, v20, v21 (spine) + v25 (ceiling), written to ratings.txt.
-#    Stash13/15/17 are ARCHIVAL only (blowout rungs at current strength; fetched
-#    + verified, NOT in the pool). v15/v17 left their M5 pool slot per M6 design.
+#    M9 STASH POOL = v21 (spine) + v25 (ceiling), written to ratings.txt.
+#    Stash13/15/17/19/20 are ARCHIVAL only (fetched + UCI-verified, NOT in the
+#    pool): 13/15/17 are blowout rungs; 19/20 are the saturated bottom rungs
+#    dropped at M9. The loop still downloads all seven versions; pool membership
+#    is decided solely by IN_POOL (so 19/20 are verified but never written).
 # ---------------------------------------------------------------------------
 declare -A STASH_ENTRIES
 # format: "label=upload_path rating"
 # Using x86_64 (generic, not bmi2/modern) for widest compatibility.
-# Ratings: CCRL Blitz (40/2), list computed 2025-12-20 (see header note).
+# Ratings: CCRL Blitz 404, list snapshot 2026-06-06 (see header note). The two
+# pool Stash rungs (21=2713, 25=2934) are unchanged from M6.
 STASH_ENTRIES["Stash13"]="4ff97bc58d4b3801d525bf723e0574e7/stash-13.0-linux-x86_64 1962"
 STASH_ENTRIES["Stash15"]="56cba735a1572e7b665b5571d0abb486/stash-15.0-linux-x86_64 2168"
 STASH_ENTRIES["Stash17"]="058f6a6706656223502f0222d861471c/stash-17.0-linux-x86_64 2294"
@@ -138,11 +144,13 @@ STASH_ENTRIES["Stash20"]="bb23ef7457a5e9e18a87078008b6ee97/stash-20.0.1-linux-x8
 STASH_ENTRIES["Stash21"]="4881a30b90418fab74b5c745826c94af/stash-21.2-linux-x86_64 2713"
 STASH_ENTRIES["Stash25"]="3ba23a4c6069e234aef12babbef2cb57/stash-25.0-linux-x86_64 2934"
 
-# Pool membership: only these enter ratings.txt. The M6 Stash rungs are the
-# v19/v20/v21 spine + the v25 ceiling; v13/v15/v17 stay archival (fetch logic
-# kept, but they are not pool anchors). The non-Stash families (Weiss, Koivisto)
-# are added to IN_POOL further below, after their own source-build steps.
-declare -A IN_POOL=( [Stash19]=1 [Stash20]=1 [Stash21]=1 [Stash25]=1 )
+# Pool membership: only these enter ratings.txt. The M9 Stash rungs are
+# v21 (2713, longitudinal spine) + v25 (2934, same-family ceiling); v13/v15/v17
+# AND now v19/v20 stay archival (fetch logic kept, but they are not pool anchors
+# — M9 dropped the saturated v19/v20 bottom rungs). The non-Stash families
+# (Weiss, Koivisto, Carp, Midnight) are added to IN_POOL further below, after
+# their own acquisition steps.
+declare -A IN_POOL=( [Stash21]=1 [Stash25]=1 )
 
 GITLAB_UPLOAD_BASE="https://gitlab.com/mhouppin/stash-bot/uploads"
 
@@ -180,6 +188,8 @@ done
 # Register the non-Stash pool members now so the full-pool guard counts them.
 IN_POOL["Weiss10"]=1
 IN_POOL["Koivisto20"]=1
+IN_POOL["Carp"]=1
+IN_POOL["Midnight"]=1
 
 # ---------------------------------------------------------------------------
 # Helper: record a verified pool engine into ratings.txt (or note archival).
@@ -310,10 +320,102 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 11. Carp 3.0.1  (3458 CCRL Blitz 404, 2026-06-06) — Carp family, Rust.
+#    Source: github.com/dede1751/carp releases/tag/v3.0.1. We fetch the
+#    prebuilt V3 asset (V3 = x86-64-v3 = AVX2; NOT V4 = AVX-512) for widest
+#    compatibility on this host. M9 ceiling rung (top of the extended pool).
+#    Idempotent: skip if the binary already exists.
+# ---------------------------------------------------------------------------
+NAME="Carp"
+RATING="3458"
+DEST="$ANCHOR_DIR/carp-3.0.1-linux-x86_64"
+CARP_URL="https://github.com/dede1751/carp/releases/download/v3.0.1/carp-v3.0.1-linux-x86_64-V3"
+
+echo "Downloading $NAME (Carp 3.0.1, prebuilt V3/AVX2 binary) ..."
+if [[ -x "$DEST" ]]; then
+    echo "  (binary already present, skipping download)"
+    if verify_uci "$DEST"; then
+        record_pool_engine "$NAME" "$RATING" "$DEST"
+    else
+        echo "SKIP [$NAME]: existing binary failed UCI handshake" >&2
+        ERRORS="$ERRORS\n  $NAME: existing binary failed UCI handshake"
+        rm -f "$DEST"
+    fi
+else
+    if curl -fL -o "$DEST" "$CARP_URL" 2>/dev/null; then
+        chmod +x "$DEST"
+        if verify_uci "$DEST"; then
+            record_pool_engine "$NAME" "$RATING" "$DEST"
+        else
+            echo "SKIP [$NAME]: UCI handshake failed (downloaded but no uciok)" >&2
+            ERRORS="$ERRORS\n  $NAME: UCI handshake failed after download"
+            rm -f "$DEST"
+        fi
+    else
+        echo "SKIP [$NAME]: download failed URL: $CARP_URL" >&2
+        ERRORS="$ERRORS\n  $NAME: download failed from $CARP_URL"
+        rm -f "$DEST"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 12. Midnight 6.0  (3055 CCRL Blitz 404, 2026-06-06) — Midnight family,
+#    SOURCE-BUILT. Source: github.com/archishou/MidnightChessEngine branch v6.
+#    `make` produces ./midnight, which we copy to the anchor dir. The makefile
+#    needs clang+lld OR gcc; it built fine here with g++/LTO and -march=native
+#    (= AVX2 on this host). Idempotent: skip if the binary already exists.
+# ---------------------------------------------------------------------------
+NAME="Midnight"
+RATING="3055"
+DEST="$ANCHOR_ABS/midnight-6.0-linux-x86_64"  # absolute: build subshell cd's to /tmp
+MIDNIGHT_REPO="https://github.com/archishou/MidnightChessEngine.git"
+MIDNIGHT_BUILD="/tmp/nebchess-midnight-build-$$"
+
+echo "Building $NAME (Midnight 6.0, from source, branch v6) ..."
+if [[ -x "$DEST" ]]; then
+    echo "  (binary already present, skipping build)"
+    if verify_uci "$DEST"; then
+        record_pool_engine "$NAME" "$RATING" "$DEST"
+    else
+        echo "SKIP [$NAME]: existing binary failed UCI handshake" >&2
+        ERRORS="$ERRORS\n  $NAME: existing binary failed UCI handshake"
+        rm -f "$DEST"
+    fi
+else
+    rm -rf "$MIDNIGHT_BUILD"
+    if git clone --branch v6 --depth 1 "$MIDNIGHT_REPO" "$MIDNIGHT_BUILD" 2>/dev/null; then
+        MSRC=$(find "$MIDNIGHT_BUILD" -maxdepth 2 -type f -iname 'makefile' -printf '%h\n' | head -1)
+        if [[ -n "$MSRC" ]] && ( cd "$MSRC" && make ) >/dev/null 2>&1; then
+            MBIN=$(find "$MIDNIGHT_BUILD" -maxdepth 3 -type f -name midnight | head -1)
+            if [[ -n "$MBIN" ]] && cp "$MBIN" "$DEST"; then
+                chmod +x "$DEST"
+                if verify_uci "$DEST"; then
+                    record_pool_engine "$NAME" "$RATING" "$DEST"
+                else
+                    echo "SKIP [$NAME]: UCI handshake failed (built but no uciok)" >&2
+                    ERRORS="$ERRORS\n  $NAME: UCI handshake failed after build"
+                    rm -f "$DEST"
+                fi
+            else
+                echo "SKIP [$NAME]: build produced no ./midnight binary" >&2
+                ERRORS="$ERRORS\n  $NAME: no midnight binary after make"
+            fi
+        else
+            echo "SKIP [$NAME]: source build failed (make; needs clang+lld OR gcc)" >&2
+            ERRORS="$ERRORS\n  $NAME: source build failed"
+        fi
+    else
+        echo "SKIP [$NAME]: git clone failed URL: $MIDNIGHT_REPO" >&2
+        ERRORS="$ERRORS\n  $NAME: git clone failed from $MIDNIGHT_REPO"
+    fi
+    rm -rf "$MIDNIGHT_BUILD"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== M6 gauntlet pool ($POOL_VERIFIED anchors in ratings.txt) ==="
+echo "=== M9 gauntlet pool ($POOL_VERIFIED anchors in ratings.txt) ==="
 if [[ -s "$RATINGS_FILE" ]]; then
     while IFS=' ' read -r eng rat; do
         echo "  $eng  $rat"
@@ -326,7 +428,8 @@ echo "(total binaries verified incl. archival: $VERIFIED)"
 # especially Stash25, the 2934 ceiling that brackets the estimate from above,
 # or any of the cross-family rungs — shifts the Ordo anchor math and any
 # absolute-rating claim bracketed by it (review finding on b04d2ee). This guard
-# now counts the full M6 mixed pool (4 Stash + Weiss + Koivisto = 6 anchors).
+# now counts the full M9 mixed pool (Stash21 + Stash25 + Weiss + Koivisto +
+# Carp + Midnight = 6 anchors).
 if [[ $POOL_VERIFIED -lt ${#IN_POOL[@]} ]]; then
     echo "" >&2
     echo "BLOCKED: only $POOL_VERIFIED of ${#IN_POOL[@]} pool anchors verified; the gauntlet requires the full pool." >&2
