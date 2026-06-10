@@ -24,7 +24,7 @@ impl NnueEvaluator {
 
     /// The shipped network, embedded at compile time.
     pub fn embedded() -> NnueEvaluator {
-        NnueEvaluator::from_bytes(include_bytes!("net1.bin"))
+        NnueEvaluator::from_bytes(include_bytes!("net2.bin"))
     }
 }
 
