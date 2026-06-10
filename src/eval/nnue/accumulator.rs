@@ -1,5 +1,5 @@
-use crate::board::types::{Color, Piece, Square};
 use super::net::{Accumulator, Network, HIDDEN};
+use crate::board::types::{Color, Piece, Square};
 
 /// (white-view, black-view) feature indices for a piece on `sq`. Source-verified against
 /// bullet Chess768 (chess768.rs): own/opp split at 384, type*64, black-view flips sq.
@@ -24,7 +24,10 @@ pub struct AccPair {
 impl AccPair {
     /// Initialised to the feature bias (so we can add/sub piece features afterwards).
     pub fn fresh(net: &Network) -> AccPair {
-        AccPair { white: net.feature_bias, black: net.feature_bias }
+        AccPair {
+            white: net.feature_bias,
+            black: net.feature_bias,
+        }
     }
 
     #[inline]
@@ -67,13 +70,18 @@ mod tests {
 
     #[test]
     fn add_then_sub_is_identity() {
-        let Ok(bytes) = std::fs::read("tools/trainer/checkpoints/toy-5/quantised.bin") else { return };
+        let Ok(bytes) = std::fs::read("tools/trainer/checkpoints/toy-5/quantised.bin") else {
+            return;
+        };
         let net = Network::from_bytes(&bytes);
         let mut acc = AccPair::fresh(&net);
         let before = acc;
         let p = Piece::new(Color::White, PieceType::Queen);
         acc.add(&net, p, Square::new(27));
-        assert_ne!(acc.white.vals, before.white.vals, "add changed the accumulator");
+        assert_ne!(
+            acc.white.vals, before.white.vals,
+            "add changed the accumulator"
+        );
         acc.sub(&net, p, Square::new(27));
         assert_eq!(acc.white.vals, before.white.vals);
         assert_eq!(acc.black.vals, before.black.vals);

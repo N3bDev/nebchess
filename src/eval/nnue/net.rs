@@ -28,7 +28,11 @@ impl Network {
     /// Load from raw bytes (works for `include_bytes!` or `std::fs::read`). Returns a
     /// 64-byte-aligned boxed Network (alignment comes from Network's `align(64)` fields).
     pub fn from_bytes(bytes: &[u8]) -> Box<Network> {
-        assert_eq!(bytes.len(), std::mem::size_of::<Network>(), "NNUE net size mismatch");
+        assert_eq!(
+            bytes.len(),
+            std::mem::size_of::<Network>(),
+            "NNUE net size mismatch"
+        );
         // SAFETY: Network is repr(C) and all-i16 (plain old data). alloc_zeroed gives a
         // correctly-aligned allocation for Network; we then copy the exact bytes in.
         unsafe {
@@ -50,7 +54,8 @@ impl Network {
     /// Returns side-to-move-relative centipawns.
     pub fn out(&self, us: &Accumulator, them: &Accumulator) -> i32 {
         let sum = self.sum(us, them);
-        (sum / i32::from(QA) + i32::from(self.output_bias)) * SCALE / (i32::from(QA) * i32::from(QB))
+        (sum / i32::from(QA) + i32::from(self.output_bias)) * SCALE
+            / (i32::from(QA) * i32::from(QB))
     }
 
     #[inline]
@@ -73,8 +78,12 @@ impl Network {
     #[inline]
     fn out_scalar(&self, us: &Accumulator, them: &Accumulator) -> i32 {
         let mut sum = 0i32;
-        for (&i, &w) in us.vals.iter().zip(&self.output_weights[..HIDDEN]) { sum += Self::screlu(i) * i32::from(w); }
-        for (&i, &w) in them.vals.iter().zip(&self.output_weights[HIDDEN..]) { sum += Self::screlu(i) * i32::from(w); }
+        for (&i, &w) in us.vals.iter().zip(&self.output_weights[..HIDDEN]) {
+            sum += Self::screlu(i) * i32::from(w);
+        }
+        for (&i, &w) in them.vals.iter().zip(&self.output_weights[HIDDEN..]) {
+            sum += Self::screlu(i) * i32::from(w);
+        }
         sum
     }
 
@@ -91,11 +100,23 @@ impl Network {
         let mut i = 0;
         while i < HIDDEN {
             // us half (aligned load: Accumulator is align(64))
-            let v = _mm256_min_epi16(_mm256_max_epi16(_mm256_load_si256(us.vals.as_ptr().add(i) as *const __m256i), min), max);
+            let v = _mm256_min_epi16(
+                _mm256_max_epi16(
+                    _mm256_load_si256(us.vals.as_ptr().add(i) as *const __m256i),
+                    min,
+                ),
+                max,
+            );
             let w = _mm256_loadu_si256(weights.as_ptr().add(i) as *const __m256i);
             acc = _mm256_add_epi32(acc, _mm256_madd_epi16(v, _mm256_mullo_epi16(v, w)));
             // them half
-            let v2 = _mm256_min_epi16(_mm256_max_epi16(_mm256_load_si256(them.vals.as_ptr().add(i) as *const __m256i), min), max);
+            let v2 = _mm256_min_epi16(
+                _mm256_max_epi16(
+                    _mm256_load_si256(them.vals.as_ptr().add(i) as *const __m256i),
+                    min,
+                ),
+                max,
+            );
             let w2 = _mm256_loadu_si256(weights.as_ptr().add(HIDDEN + i) as *const __m256i);
             acc = _mm256_add_epi32(acc, _mm256_madd_epi16(v2, _mm256_mullo_epi16(v2, w2)));
             i += 16;
@@ -129,10 +150,17 @@ mod tests {
 
     fn reference_out(net: &Network, us: &Accumulator, them: &Accumulator) -> i32 {
         // Verbatim port of bullet examples/simple.rs Network::evaluate — the canonical reference.
-        fn screlu(x: i16) -> i32 { let y = i32::from(x).clamp(0, i32::from(QA)); y * y }
+        fn screlu(x: i16) -> i32 {
+            let y = i32::from(x).clamp(0, i32::from(QA));
+            y * y
+        }
         let mut output = 0i32;
-        for (&i, &w) in us.vals.iter().zip(&net.output_weights[..HIDDEN]) { output += screlu(i) * i32::from(w); }
-        for (&i, &w) in them.vals.iter().zip(&net.output_weights[HIDDEN..]) { output += screlu(i) * i32::from(w); }
+        for (&i, &w) in us.vals.iter().zip(&net.output_weights[..HIDDEN]) {
+            output += screlu(i) * i32::from(w);
+        }
+        for (&i, &w) in them.vals.iter().zip(&net.output_weights[HIDDEN..]) {
+            output += screlu(i) * i32::from(w);
+        }
         output /= i32::from(QA);
         output += i32::from(net.output_bias);
         output *= SCALE;
@@ -142,31 +170,54 @@ mod tests {
 
     #[test]
     fn out_matches_reference() {
-        let Ok(bytes) = std::fs::read(TOY_NET) else { return };
+        let Ok(bytes) = std::fs::read(TOY_NET) else {
+            return;
+        };
         let net = Network::from_bytes(&bytes);
         let mut s = 0x1234_5678u64;
-        let mut rnd = || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; (s % 512) as i16 - 128 };
+        let mut rnd = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s % 512) as i16 - 128
+        };
         for _ in 0..64 {
             let mut us = Accumulator { vals: [0; HIDDEN] };
             let mut them = Accumulator { vals: [0; HIDDEN] };
-            for i in 0..HIDDEN { us.vals[i] = rnd(); them.vals[i] = rnd(); }
+            for i in 0..HIDDEN {
+                us.vals[i] = rnd();
+                them.vals[i] = rnd();
+            }
             assert_eq!(net.out(&us, &them), reference_out(&net, &us, &them));
         }
     }
 
     #[test]
     fn scalar_and_avx2_agree() {
-        let Ok(bytes) = std::fs::read(TOY_NET) else { return };
+        let Ok(bytes) = std::fs::read(TOY_NET) else {
+            return;
+        };
         #[cfg(target_arch = "x86_64")]
         {
-            if !std::arch::is_x86_feature_detected!("avx2") { eprintln!("skip: no avx2"); return; }
+            if !std::arch::is_x86_feature_detected!("avx2") {
+                eprintln!("skip: no avx2");
+                return;
+            }
             let net = Network::from_bytes(&bytes);
             let mut s = 0xABCD_1234u64;
-            let mut rnd = || { s ^= s << 13; s ^= s >> 7; s ^= s << 17; (s % 600) as i16 - 200 };
+            let mut rnd = || {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                (s % 600) as i16 - 200
+            };
             for _ in 0..64 {
                 let mut us = Accumulator { vals: [0; HIDDEN] };
                 let mut them = Accumulator { vals: [0; HIDDEN] };
-                for i in 0..HIDDEN { us.vals[i] = rnd(); them.vals[i] = rnd(); }
+                for i in 0..HIDDEN {
+                    us.vals[i] = rnd();
+                    them.vals[i] = rnd();
+                }
                 let scalar = net.out_scalar(&us, &them);
                 let avx2 = unsafe { Network::out_avx2(&us, &them, &net.output_weights) };
                 assert_eq!(scalar, avx2, "scalar and AVX2 sums disagree");
@@ -186,8 +237,12 @@ mod tests {
         let net = Network::from_bytes(&bytes);
 
         // Build a fixed accumulator pair
-        let mut us = Accumulator { vals: [0i16; HIDDEN] };
-        let mut them = Accumulator { vals: [0i16; HIDDEN] };
+        let mut us = Accumulator {
+            vals: [0i16; HIDDEN],
+        };
+        let mut them = Accumulator {
+            vals: [0i16; HIDDEN],
+        };
         for i in 0..HIDDEN {
             us.vals[i] = (i % 255) as i16;
             them.vals[i] = ((i + 128) % 255) as i16;
@@ -201,6 +256,9 @@ mod tests {
         }
         let elapsed = t0.elapsed();
         let per_sec = ITERS as f64 / elapsed.as_secs_f64();
-        eprintln!("NNUE out() throughput: {:.0} evals/sec (sink={})", per_sec, sink);
+        eprintln!(
+            "NNUE out() throughput: {:.0} evals/sec (sink={})",
+            per_sec, sink
+        );
     }
 }

@@ -8,8 +8,8 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use nebchess::board::{generate_moves, movegen::find_first_legal, Move, MoveList, Position};
 use nebchess::board::types::Color;
+use nebchess::board::{generate_moves, movegen::find_first_legal, Move, MoveList, Position};
 use nebchess::eval::NnueEvaluator;
 use nebchess::search::limits::Limits;
 use nebchess::search::SearchThread;
@@ -82,8 +82,20 @@ fn outcome_to_wdl(o: Outcome) -> f32 {
 fn wdl_to_outcome(stm: Color, w: Wdl) -> Outcome {
     match w {
         Wdl::Draw => Outcome::Draw,
-        Wdl::Win => if stm == Color::White { Outcome::WhiteWin } else { Outcome::BlackWin },
-        Wdl::Loss => if stm == Color::White { Outcome::BlackWin } else { Outcome::WhiteWin },
+        Wdl::Win => {
+            if stm == Color::White {
+                Outcome::WhiteWin
+            } else {
+                Outcome::BlackWin
+            }
+        }
+        Wdl::Loss => {
+            if stm == Color::White {
+                Outcome::BlackWin
+            } else {
+                Outcome::WhiteWin
+            }
+        }
     }
 }
 
@@ -92,7 +104,11 @@ fn wdl_to_outcome(stm: Color, w: Wdl) -> Outcome {
 fn terminal_outcome(pos: &mut Position) -> Option<Outcome> {
     if find_first_legal(pos).is_none() {
         return Some(if pos.in_check(pos.stm()) {
-            if pos.stm() == Color::White { Outcome::BlackWin } else { Outcome::WhiteWin }
+            if pos.stm() == Color::White {
+                Outcome::BlackWin
+            } else {
+                Outcome::WhiteWin
+            }
         } else {
             Outcome::Draw // stalemate
         });
@@ -108,7 +124,11 @@ const MATE_THRESHOLD: i32 = 29_000; // mirrors search::MATE_BOUND
 
 /// Convert a side-to-move-relative centipawn score to white-relative.
 fn cp_white(stm: Color, score_cp: i32) -> i32 {
-    if stm == Color::White { score_cp } else { -score_cp }
+    if stm == Color::White {
+        score_cp
+    } else {
+        -score_cp
+    }
 }
 
 /// Smart-fen-skipping: record only QUIET, non-saturated positions where the
@@ -128,17 +148,30 @@ struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { soft_nodes: 5_000, opening_plies: 8, max_plies: 400, resign_cp: 1_000, resign_plies: 8 }
+        Config {
+            soft_nodes: 5_000,
+            opening_plies: 8,
+            max_plies: 400,
+            resign_cp: 1_000,
+            resign_plies: 8,
+        }
     }
 }
 
 /// Play one self-play game; push `(fen, cp_white, wdl_white)` for each kept position.
 /// Reuses the caller's SearchThread (and its TT) across games for throughput; this is
 /// deterministic per worker (single-threaded) and benign at ~5k nodes.
-fn play_game(st: &mut SearchThread<NnueEvaluator>, rng: &mut Rng, cfg: &Config,
-             tb: Option<&Tb>, out: &mut Vec<(String, i32, f32)>) {
+fn play_game(
+    st: &mut SearchThread<NnueEvaluator>,
+    rng: &mut Rng,
+    cfg: &Config,
+    tb: Option<&Tb>,
+    out: &mut Vec<(String, i32, f32)>,
+) {
     // 1. Random opening (skip the game if it dead-ends during the opening).
-    let Some(opening) = play_random_opening(rng, cfg.opening_plies) else { return };
+    let Some(opening) = play_random_opening(rng, cfg.opening_plies) else {
+        return;
+    };
     st.pos = opening;
 
     // 2. Self-play.
@@ -173,9 +206,17 @@ fn play_game(st: &mut SearchThread<NnueEvaluator>, rng: &mut Rng, cfg: &Config,
 
         // Resign adjudication: a sustained large white-relative edge ends the game.
         let wcp = cp_white(st.pos.stm(), score);
-        resign_run = if wcp.abs() >= cfg.resign_cp { resign_run + 1 } else { 0 };
+        resign_run = if wcp.abs() >= cfg.resign_cp {
+            resign_run + 1
+        } else {
+            0
+        };
         if resign_run >= cfg.resign_plies {
-            outcome = Some(if wcp > 0 { Outcome::WhiteWin } else { Outcome::BlackWin });
+            outcome = Some(if wcp > 0 {
+                Outcome::WhiteWin
+            } else {
+                Outcome::BlackWin
+            });
             break;
         }
 
@@ -191,7 +232,7 @@ fn play_game(st: &mut SearchThread<NnueEvaluator>, rng: &mut Rng, cfg: &Config,
 
 struct Args {
     out_dir: String,
-    games: u64,     // total games across all workers
+    games: u64, // total games across all workers
     threads: usize,
     seed: u64,
     tb_path: Option<String>,
@@ -212,16 +253,66 @@ fn parse_args() -> Args {
     while i < argv.len() {
         let flag = argv[i].clone();
         match flag.as_str() {
-            "--out" => { i += 1; if let Some(v) = argv.get(i) { a.out_dir = v.clone(); } }
-            "--games" => { i += 1; a.games = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.games); }
-            "--threads" => { i += 1; a.threads = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.threads); }
-            "--seed" => { i += 1; a.seed = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.seed); }
-            "--nodes" => { i += 1; a.cfg.soft_nodes = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.soft_nodes); }
-            "--opening-plies" => { i += 1; a.cfg.opening_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.opening_plies); }
-            "--max-plies" => { i += 1; a.cfg.max_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.max_plies); }
-            "--resign-cp" => { i += 1; a.cfg.resign_cp = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.resign_cp); }
-            "--resign-plies" => { i += 1; a.cfg.resign_plies = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.cfg.resign_plies); }
-            "--tb" => { i += 1; a.tb_path = argv.get(i).cloned(); }
+            "--out" => {
+                i += 1;
+                if let Some(v) = argv.get(i) {
+                    a.out_dir = v.clone();
+                }
+            }
+            "--games" => {
+                i += 1;
+                a.games = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.games);
+            }
+            "--threads" => {
+                i += 1;
+                a.threads = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.threads);
+            }
+            "--seed" => {
+                i += 1;
+                a.seed = argv.get(i).and_then(|s| s.parse().ok()).unwrap_or(a.seed);
+            }
+            "--nodes" => {
+                i += 1;
+                a.cfg.soft_nodes = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.cfg.soft_nodes);
+            }
+            "--opening-plies" => {
+                i += 1;
+                a.cfg.opening_plies = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.cfg.opening_plies);
+            }
+            "--max-plies" => {
+                i += 1;
+                a.cfg.max_plies = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.cfg.max_plies);
+            }
+            "--resign-cp" => {
+                i += 1;
+                a.cfg.resign_cp = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.cfg.resign_cp);
+            }
+            "--resign-plies" => {
+                i += 1;
+                a.cfg.resign_plies = argv
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(a.cfg.resign_plies);
+            }
+            "--tb" => {
+                i += 1;
+                a.tb_path = argv.get(i).cloned();
+            }
             "--help" | "-h" => {
                 eprintln!("usage: datagen [--out DIR] [--games N] [--threads T] [--seed S] [--nodes SOFT] [--opening-plies P] [--max-plies M] [--resign-cp CP] [--resign-plies N] [--tb PATH]");
                 std::process::exit(0);
@@ -234,10 +325,18 @@ fn parse_args() -> Args {
     a
 }
 
-fn worker(id: usize, seed: u64, games: u64, cfg: &Config, tb: Option<&Tb>,
-          out_dir: &str, total: &AtomicU64) {
+fn worker(
+    id: usize,
+    seed: u64,
+    games: u64,
+    cfg: &Config,
+    tb: Option<&Tb>,
+    out_dir: &str,
+    total: &AtomicU64,
+) {
     let mut rng = Rng::new(seed);
-    let mut st = SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
+    let mut st =
+        SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
     let path = format!("{out_dir}/shard_{id:02}.txt");
     let mut f = BufWriter::new(File::create(&path).expect("create shard"));
     let mut buf: Vec<(String, i32, f32)> = Vec::new();
@@ -257,19 +356,31 @@ fn worker(id: usize, seed: u64, games: u64, cfg: &Config, tb: Option<&Tb>,
 
 fn run_stats(dir: &str) {
     use std::io::{BufRead, BufReader};
-    let (mut n, mut in_check, mut bad_fen, mut wins, mut draws, mut losses) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut n, mut in_check, mut bad_fen, mut wins, mut draws, mut losses) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     let (mut cp_min, mut cp_max, mut cp_sum) = (i32::MAX, i32::MIN, 0i64);
     for entry in std::fs::read_dir(dir).expect("read out dir") {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("txt") { continue; }
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
         for line in BufReader::new(File::open(&path).unwrap()).lines() {
             let line = line.unwrap();
             let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-            if parts.len() != 3 { continue; }
+            if parts.len() != 3 {
+                continue;
+            }
             n += 1;
             match Position::from_fen(parts[0]) {
-                Ok(pos) => if pos.in_check(pos.stm()) { in_check += 1; },
-                Err(_) => { bad_fen += 1; continue; }
+                Ok(pos) => {
+                    if pos.in_check(pos.stm()) {
+                        in_check += 1;
+                    }
+                }
+                Err(_) => {
+                    bad_fen += 1;
+                    continue;
+                }
             }
             if let Ok(cp) = parts[1].parse::<i32>() {
                 cp_min = cp_min.min(cp);
@@ -284,10 +395,24 @@ fn run_stats(dir: &str) {
             }
         }
     }
-    let pct = |x: u64| if n > 0 { 100.0 * x as f64 / n as f64 } else { 0.0 };
+    let pct = |x: u64| {
+        if n > 0 {
+            100.0 * x as f64 / n as f64
+        } else {
+            0.0
+        }
+    };
     println!("positions: {n}");
-    println!("white W/D/L: {:.1}% / {:.1}% / {:.1}%", pct(wins), pct(draws), pct(losses));
-    println!("cp white: min {cp_min} max {cp_max} mean {:.1}", if n > 0 { cp_sum as f64 / n as f64 } else { 0.0 });
+    println!(
+        "white W/D/L: {:.1}% / {:.1}% / {:.1}%",
+        pct(wins),
+        pct(draws),
+        pct(losses)
+    );
+    println!(
+        "cp white: min {cp_min} max {cp_max} mean {:.1}",
+        if n > 0 { cp_sum as f64 / n as f64 } else { 0.0 }
+    );
     println!("LEAKS -> in-check: {in_check}  bad-fen: {bad_fen}  (both MUST be 0)");
     assert_eq!(in_check, 0, "in-check positions leaked into the data");
     assert_eq!(bad_fen, 0, "unparseable FENs in the data");
@@ -296,14 +421,25 @@ fn run_stats(dir: &str) {
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.first().map(|s| s.as_str()) == Some("stats") {
-        run_stats(argv.get(1).map(|s| s.as_str()).unwrap_or("tools/data/selfplay"));
+        run_stats(
+            argv.get(1)
+                .map(|s| s.as_str())
+                .unwrap_or("tools/data/selfplay"),
+        );
         return;
     }
     let args = parse_args();
     std::fs::create_dir_all(&args.out_dir).expect("create out dir");
     let tb = args.tb_path.as_deref().and_then(Tb::init);
     if args.tb_path.is_some() {
-        eprintln!("datagen: TB adjudication {}", if tb.is_some() { "ENABLED" } else { "DISABLED (init failed)" });
+        eprintln!(
+            "datagen: TB adjudication {}",
+            if tb.is_some() {
+                "ENABLED"
+            } else {
+                "DISABLED (init failed)"
+            }
+        );
     }
     let total = AtomicU64::new(0);
     let t = args.threads;
@@ -313,13 +449,20 @@ fn main() {
     std::thread::scope(|s| {
         for w in 0..t {
             // Distinct stream per worker; fixed per-worker quota -> reproducible given (seed, threads, games).
-            let seed = args.seed.wrapping_add((w as u64).wrapping_mul(0x9E3779B97F4A7C15));
+            let seed = args
+                .seed
+                .wrapping_add((w as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let games = base + if (w as u64) < rem { 1 } else { 0 };
             let (cfg, tb_ref, out_dir, total_ref) = (&args.cfg, tb.as_ref(), &args.out_dir, &total);
             s.spawn(move || worker(w, seed, games, cfg, tb_ref, out_dir, total_ref));
         }
     });
-    println!("datagen done: {} positions across {} shards in {}", total.load(Ordering::Relaxed), t, args.out_dir);
+    println!(
+        "datagen done: {} positions across {} shards in {}",
+        total.load(Ordering::Relaxed),
+        t,
+        args.out_dir
+    );
 }
 
 #[cfg(test)]
@@ -328,9 +471,18 @@ mod tests {
 
     #[test]
     fn rng_is_deterministic_and_bounded() {
-        let a: Vec<u64> = { let mut r = Rng::new(42); (0..5).map(|_| r.next_u64()).collect() };
-        let b: Vec<u64> = { let mut r = Rng::new(42); (0..5).map(|_| r.next_u64()).collect() };
-        let c: Vec<u64> = { let mut r = Rng::new(43); (0..5).map(|_| r.next_u64()).collect() };
+        let a: Vec<u64> = {
+            let mut r = Rng::new(42);
+            (0..5).map(|_| r.next_u64()).collect()
+        };
+        let b: Vec<u64> = {
+            let mut r = Rng::new(42);
+            (0..5).map(|_| r.next_u64()).collect()
+        };
+        let c: Vec<u64> = {
+            let mut r = Rng::new(43);
+            (0..5).map(|_| r.next_u64()).collect()
+        };
         assert_eq!(a, b, "same seed -> same stream");
         assert_ne!(a, c, "different seed -> different stream");
 
@@ -357,7 +509,9 @@ mod tests {
     #[test]
     fn terminal_outcome_detects_endings() {
         // Fool's mate: White to move, checkmated -> Black wins.
-        let mut mate = Position::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3").unwrap();
+        let mut mate =
+            Position::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+                .unwrap();
         assert_eq!(terminal_outcome(&mut mate), Some(Outcome::BlackWin));
 
         // Stalemate: Black to move, not in check, no legal moves -> Draw.
@@ -398,9 +552,18 @@ mod tests {
         let capture = Move::new(e2, e4, Move::CAPTURE);
 
         let start = Position::startpos();
-        assert!(should_record(&start, quiet, 25), "quiet, in-bounds score -> record");
-        assert!(!should_record(&start, capture, 25), "best move is a capture -> skip");
-        assert!(!should_record(&start, quiet, 30_000), "saturated/mate score -> skip");
+        assert!(
+            should_record(&start, quiet, 25),
+            "quiet, in-bounds score -> record"
+        );
+        assert!(
+            !should_record(&start, capture, 25),
+            "best move is a capture -> skip"
+        );
+        assert!(
+            !should_record(&start, quiet, 30_000),
+            "saturated/mate score -> skip"
+        );
 
         // Side to move in check -> skip.
         let in_check = Position::from_fen("4k3/8/8/8/7q/8/8/4K3 w - - 0 1").unwrap();
@@ -409,10 +572,16 @@ mod tests {
 
     #[test]
     fn play_game_is_deterministic_and_consistent() {
-        let cfg = Config { soft_nodes: 400, opening_plies: 4, max_plies: 60, ..Config::default() };
+        let cfg = Config {
+            soft_nodes: 400,
+            opening_plies: 4,
+            max_plies: 60,
+            ..Config::default()
+        };
 
         let run = |seed: u64| {
-            let mut st = SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
+            let mut st =
+                SearchThread::<NnueEvaluator>::new(Position::startpos(), NnueEvaluator::embedded());
             let mut rng = Rng::new(seed);
             let mut out = Vec::new();
             play_game(&mut st, &mut rng, &cfg, None, &mut out);
@@ -425,7 +594,10 @@ mod tests {
 
         if let Some((_, _, wdl0)) = a.first() {
             for (fen, cp, wdl) in &a {
-                assert!(Position::from_fen(fen).is_ok(), "recorded FEN must parse: {fen}");
+                assert!(
+                    Position::from_fen(fen).is_ok(),
+                    "recorded FEN must parse: {fen}"
+                );
                 assert!(*wdl == 0.0 || *wdl == 0.5 || *wdl == 1.0, "wdl in set");
                 assert_eq!(wdl, wdl0, "one game -> one result label");
                 assert!(cp.abs() < MATE_THRESHOLD, "no saturated scores recorded");
