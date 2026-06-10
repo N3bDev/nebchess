@@ -1,6 +1,6 @@
 # NebChess
 
-A from-scratch UCI chess engine in Rust with a self-play-trained **NNUE** evaluation. Measured **2993 ± 17** (10+0.1, anchored vs a 3-family pool, engine-default config — book/Syzygy are live-deploy multipliers on top; see docs/strength-log.md for caveats). **M8 (NNUE) cleared the 2900 target — the 3000 stretch goal sits inside the error band; M9 net-scaling closes it.**
+A from-scratch UCI chess engine in Rust with a self-play-trained **NNUE** evaluation. Measured **3131 ± 17** (10+0.1, anchored vs a 5-family pool spanning 2713–3458, engine-default config — book/Syzygy are live-deploy multipliers on top; see docs/strength-log.md for caveats). **The 3000 stretch goal fell in M9: one turn of the self-play data flywheel (same net architecture, better data) was worth +142 anchored.**
 
 Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/superpowers/specs/2026-06-04-nebchess-engine-design.md)
 
@@ -16,7 +16,8 @@ Design spec: [docs/superpowers/specs/2026-06-04-nebchess-engine-design.md](docs/
 - [x] M6b: TimeBrain + bot readiness (book, Syzygy, pondering, Lichess hardening)
 - [x] M7: desktop migration (RTX 5080); TimeBrain-v2 attempted → de-scoped (NebChess is time-elastic — banking time costs strength)
 - [x] M8: **NNUE evaluation** — self-play-trained `(768→768)x2→1` SCReLU net, **+165 anchored (2827→2993)**, replaces HCE
-- [ ] M9: NNUE scaling (larger hidden layer, output/king buckets, datagen→train→promote loop) → push past 3000
+- [x] M9: **the data flywheel** — net2 = same architecture retrained on data self-played by the NNUE engine, **+142 anchored (2989→3131)**; anchor ladder extended to 3458 (Carp, Midnight)
+- [ ] M10: NNUE capacity (larger hidden layer, output buckets) on flywheel data → next rung
 
 ## Play against it
 

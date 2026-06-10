@@ -1,6 +1,6 @@
 [package]
 name = "nebchess"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 description = "A from-scratch UCI chess engine in Rust with a self-play-trained NNUE evaluation"
 repository = "https://github.com/N3bDev/nebchess"
