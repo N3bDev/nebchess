@@ -12,6 +12,7 @@
 /tools/lichess/nebchess-live
 /tools/lichess/*.log
 /tools/lichess/matchmaker-state.json
+/tools/lichess/lichess-bot/game-pgns/
 __pycache__/
 .claude/
 /tools/*.pgn
