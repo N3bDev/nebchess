@@ -14,9 +14,10 @@ use crate::board::{attacks, Bitboard, Color, Move, PieceType, Position, Square};
 use pyrrhic_rs::{Color as TbColor, DtzProbeValue, EngineAdapter, TableBases, WdlProbeResult};
 
 /// Win/Draw/Loss from the side-to-move's perspective. The 50-move-cursed
-/// variants (`CursedWin`, `BlessedLoss`) collapse to `Draw`: we only probe at
-/// `halfmove == 0`, but a cursed result still means the win/loss is NOT
-/// reachable inside the 50-move rule, so scoring it a draw is the safe,
+/// variants (`CursedWin`, `BlessedLoss`) collapse to `Draw`: WDL probes only
+/// fire at `halfmove == 0` (see `probeable_wdl`), and root probes hand pyrrhic
+/// the real halfmove clock — in both cases a cursed result means the win/loss
+/// is NOT reachable inside the 50-move rule, so scoring it a draw is the safe,
 /// never-overclaiming choice.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Wdl {
@@ -142,15 +143,22 @@ impl Tb {
         pos.occ_all().count()
     }
 
-    /// True when this position is a legal Syzygy probe target: few enough
-    /// pieces, the 50-move counter reset (Syzygy's WDL/DTZ assume rule50 == 0
-    /// for a clean win/loss verdict), and no castling rights (Syzygy positions
-    /// never have them).
+    /// Structural conditions ANY probe needs: few enough pieces and no
+    /// castling rights (Syzygy positions never have them). Deliberately silent
+    /// on the 50-move counter — WDL probes add that via [`Self::probeable_wdl`],
+    /// while root probes must run at any halfmove value (see [`Tb::probe_root`]).
     #[inline]
-    fn probeable(&self, pos: &Position) -> bool {
+    fn probeable_men(&self, pos: &Position) -> bool {
         Self::piece_count(pos) <= self.max_men
-            && pos.halfmove() == 0
             && pos.castling() == crate::board::CastlingRights::NONE
+    }
+
+    /// WDL probes are only sound at `halfmove == 0`: WDL tables ignore the
+    /// 50-move counter, so at `halfmove > 0` a cursed win (NOT reachable
+    /// inside the 50-move rule from here) would be misreported as a clean win.
+    #[inline]
+    fn probeable_wdl(&self, pos: &Position) -> bool {
+        self.probeable_men(pos) && pos.halfmove() == 0
     }
 
     /// Bitboards for a probe call. `white`/`black` are color occupancies; the
@@ -178,7 +186,7 @@ impl Tb {
     /// WDL probe (side-to-move relative). `None` when the position isn't a
     /// legal probe target or the lookup misses (e.g. a 4-man table absent).
     pub fn probe_wdl(&self, pos: &Position) -> Option<Wdl> {
-        if !self.probeable(pos) {
+        if !self.probeable_wdl(pos) {
             return None;
         }
         let b = Self::bits(pos);
@@ -204,8 +212,18 @@ impl Tb {
     /// (stalemate / checkmate sentinels). The returned [`Move`] is rebuilt via
     /// the legal move generator so its flags (capture / promo / ep / castle)
     /// are correct — the raw (from, to, promo) from Syzygy carries no flags.
+    ///
+    /// Unlike [`Tb::probe_wdl`], this MUST fire at any halfmove value: pyrrhic
+    /// gets the true clock (`pos.halfmove()` below) and its DTZ root logic
+    /// handles rule 50 itself — it picks the minimal-DTZ winning move and
+    /// scores the result against the remaining budget (`dtz_to_wdl(rule50,
+    /// dtz)`). Gating this probe on `halfmove == 0` caused a live-game loss of
+    /// a win: in pawnless TB endings (KRvK etc.) no move ever resets the
+    /// counter, so the engine played exactly ONE tablebase move at entry and
+    /// then shuffled to a 50-move draw from mate-in-11 (game b86gNzRp,
+    /// 2026-06-10).
     pub fn probe_root(&self, pos: &Position) -> Option<(Move, Wdl)> {
-        if !self.probeable(pos) {
+        if !self.probeable_men(pos) {
             return None;
         }
         let b = Self::bits(pos);
@@ -268,17 +286,96 @@ fn match_legal_move(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::movegen::find_first_legal;
+    use std::sync::Mutex;
+
+    /// pyrrhic-rs keeps a process-global singleton (see `Tb::init`): two tests
+    /// initializing concurrently make the loser get `AlreadyInitialized` ->
+    /// `None` and silently skip. Every test that calls `Tb::init` takes this
+    /// lock so init/probe/drop cycles are serialized and deterministic.
+    static TB_GATE: Mutex<()> = Mutex::new(());
+
+    /// Local 3-4-5 Syzygy tables (gitignored, absent in CI — callers skip on
+    /// `None`, matching the `tests/syzygy.rs` pattern). Paths are relative to
+    /// the crate root, which is the cwd for `cargo test --lib`.
+    fn tables() -> Option<Tb> {
+        Tb::init("tools/tb")
+    }
 
     /// A bad / empty `SyzygyPath` must yield `None` gracefully (CI has no
     /// tables; the engine ships with the feature off by default). This is the
     /// non-ignored smoke test the correctness suite leans on.
     #[test]
     fn init_none_on_empty_or_bad_path() {
+        let _gate = TB_GATE.lock().unwrap();
         assert!(Tb::init("").is_none(), "empty path -> None");
         assert!(Tb::init("   ").is_none(), "whitespace path -> None");
         assert!(
             Tb::init("/nonexistent/syzygy/path/xyz").is_none(),
             "missing directory -> None (no panic)"
+        );
+    }
+
+    /// Root probes must fire with the 50-move counter RUNNING (here hmc=30):
+    /// pyrrhic receives the true clock and handles rule 50 itself. The old
+    /// shared `halfmove == 0` gate returned `None` here — the b86gNzRp bug.
+    #[test]
+    fn root_probe_fires_at_nonzero_halfmove() {
+        let _gate = TB_GATE.lock().unwrap();
+        let Some(tb) = tables() else { return };
+        let pos = Position::from_fen("8/8/8/4k3/8/8/4K3/4R3 w - - 30 1").unwrap();
+        let (mv, wdl) = tb
+            .probe_root(&pos)
+            .expect("KRvK root probe must hit at halfmove > 0");
+        assert_eq!(wdl, Wdl::Win, "KRvK with 70 plies of budget is a clean win");
+        let mut check = pos.clone();
+        assert!(check.make(mv), "TB root move {mv} must be legal");
+    }
+
+    /// The b86gNzRp regression, end to end: enter KRvK mid-count (hmc=20) and
+    /// drive BOTH sides by root probes alone. Every move raises the counter
+    /// (no pawn/capture resets exist in KRvK), so each probe runs at
+    /// halfmove > 0; with the old gate the winning side got exactly one TB
+    /// move and then nothing. The win must convert to mate before the 50-move
+    /// rule (halfmove 100) and within a sane ply budget.
+    #[test]
+    fn krk_converts_within_fifty_move_budget() {
+        let _gate = TB_GATE.lock().unwrap();
+        let Some(tb) = tables() else { return };
+        let mut pos = Position::from_fen("8/8/8/4k3/8/8/4K3/4R3 w - - 20 1").unwrap();
+        let mut plies = 0;
+        while find_first_legal(&mut pos).is_some() {
+            assert!(plies < 60, "no mate within 60 plies — conversion stalled");
+            assert!(
+                pos.halfmove() < 100,
+                "hit the 50-move rule before mate — the b86gNzRp regression"
+            );
+            let mv = match tb.probe_root(&pos) {
+                Some((mv, _)) => mv,
+                None => {
+                    // The defender may lack a TB verdict only at terminal
+                    // sentinels (handled by the loop guard); the WINNING side
+                    // must always get a move — that miss IS the bug.
+                    assert_eq!(
+                        pos.stm(),
+                        Color::Black,
+                        "winning side lost its TB root move mid-conversion"
+                    );
+                    find_first_legal(&mut pos).unwrap()
+                }
+            };
+            assert!(pos.make(mv), "TB move {mv} must be legal");
+            plies += 1;
+        }
+        assert!(
+            pos.in_check(pos.stm()),
+            "game ended without mate (stalemate?) after {plies} plies"
+        );
+        assert_eq!(pos.stm(), Color::Black, "the defender is the mated side");
+        assert!(pos.halfmove() < 100, "mate must beat the 50-move counter");
+        println!(
+            "KRvK converted to mate in {plies} plies (final hmc {})",
+            pos.halfmove()
         );
     }
 
