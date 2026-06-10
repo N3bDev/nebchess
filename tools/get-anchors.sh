@@ -364,6 +364,13 @@ fi
 #    `make` produces ./midnight, which we copy to the anchor dir. The makefile
 #    needs clang+lld OR gcc; it built fine here with g++/LTO and -march=native
 #    (= AVX2 on this host). Idempotent: skip if the binary already exists.
+#    REQUIRED PATCH: v6 emits promotions with CAPITAL piece chars ("a7a8Q");
+#    UCI requires lowercase and fastchess forfeits the game ("illegal move").
+#    Found 2026-06-10: 101/300 gauntlet games were corrupted free wins until
+#    patched (upstream knew — branch fix-promo-out — but never fixed v6).
+#    The sed below lowercases MOVE_TYPESTR_UCI only; search/eval untouched,
+#    so the CCRL 3055 pin stays valid. Its INPUT parser already tolerates
+#    both cases (parse_uci_move.h tolower's), so only output needs fixing.
 # ---------------------------------------------------------------------------
 NAME="Midnight"
 RATING="3055"
@@ -384,6 +391,23 @@ if [[ -x "$DEST" ]]; then
 else
     rm -rf "$MIDNIGHT_BUILD"
     if git clone --branch v6 --depth 1 "$MIDNIGHT_REPO" "$MIDNIGHT_BUILD" 2>/dev/null; then
+        # Patch the v6 promotion-output bug (see section comment): lowercase
+        # the UCI promotion suffixes in MOVE_TYPESTR_UCI (and ONLY that table).
+        MTYPES=$(find "$MIDNIGHT_BUILD" -path '*move_generation/types.cpp' | head -1)
+        if [[ -n "$MTYPES" ]]; then
+            sed -i '/MOVE_TYPESTR_UCI\[16\]/,/};/ s/"N", "B", "R", "Q"/"n", "b", "r", "q"/g' "$MTYPES"
+            if grep -A2 'MOVE_TYPESTR_UCI\[16\]' "$MTYPES" | grep -q '"q"'; then
+                echo "  (patched v6 promotion-output bug: UCI suffixes now lowercase)"
+            else
+                echo "SKIP [$NAME]: promo-output patch did not apply — refusing to build the buggy v6" >&2
+                ERRORS="$ERRORS\n  $NAME: promo-output patch failed to apply"
+                rm -rf "$MIDNIGHT_BUILD"
+            fi
+        else
+            echo "SKIP [$NAME]: types.cpp not found — cannot apply promo-output patch, refusing to build the buggy v6" >&2
+            ERRORS="$ERRORS\n  $NAME: types.cpp not found for promo-output patch"
+            rm -rf "$MIDNIGHT_BUILD"
+        fi
         MSRC=$(find "$MIDNIGHT_BUILD" -maxdepth 2 -type f -iname 'makefile' -printf '%h\n' | head -1)
         if [[ -n "$MSRC" ]] && ( cd "$MSRC" && make ) >/dev/null 2>&1; then
             MBIN=$(find "$MIDNIGHT_BUILD" -maxdepth 3 -type f -name midnight | head -1)
