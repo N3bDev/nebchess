@@ -17,7 +17,7 @@ never exceeding a rolling-24h game budget (default 96, margin under Lichess's
 ## Deploy + run
 ```sh
 ./deploy.sh    # snapshot target/release/nebchess -> nebchess-live (bot must be stopped)
-./run.sh       # starts both processes; Ctrl-C stops both
+./run.sh       # starts both; Ctrl-C stops both and sweeps all child processes
 ```
 
 Deploy config: engine book (BookFile/BookDepth 16), Syzygy, ponder ON,
