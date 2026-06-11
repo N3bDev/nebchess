@@ -5,7 +5,7 @@
 /tools/data/
 /tools/tb/
 *.bin
-!/src/eval/nnue/net2.bin
+!/src/eval/nnue/net3a.bin
 .env
 /tools/lichess/venv/
 /tools/lichess/lichess-bot/
